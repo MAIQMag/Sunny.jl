@@ -168,6 +168,7 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     # Preallocation
     T = zeros(ComplexF64, 2L, 2L, Nq)
     H = zeros(ComplexF64, 2L, 2L, Nq)
+    evalues = zeros(Float64, 2L, Nq)
     Avec_pref = zeros(ComplexF64, Nobs, Na)
     disp = zeros(Float64, L, Nq)
     intensity = zeros(eltype(measure), L, Nq)
@@ -184,13 +185,17 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     for (iq, q) in enumerate(qpts.qs)
         Hq = view(H,:,:,iq)
         Tq = view(T,:,:,iq)
-
         # Solve generalized eigenvalue problem, Ĩ t = λ H t, for columns t of T.
-        λ, T0 = eigen!(Hermitian(Tq), Hermitian(Hq))
+        tmp, T0 = eigen!(Hermitian(Tq), Hermitian(Hq))
+        view(evalues,:,iq) .= tmp
 
         # Note that T0 and T refer to the same data.
         @assert T0 === Tq
+    end
 
+    for (iq, q) in enumerate(qpts.qs)
+        Tq = view(T,:,:,iq)
+        λ = view(evalues,:,iq)
         # Normalize columns of T so that para-unitarity holds, T† Ĩ T = Ĩ.
         for j in axes(Tq, 2)
             c = 1 / sqrt(abs(λ[j]))
