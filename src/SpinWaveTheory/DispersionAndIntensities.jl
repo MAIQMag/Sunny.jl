@@ -166,16 +166,56 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     corrbuf = zeros(ComplexF64, Ncorr)
 
     # Preallocation
-    T = zeros(ComplexF64, 2L, 2L)
-    H = zeros(ComplexF64, 2L, 2L)
+    T = zeros(ComplexF64, 2L, 2L, Nq)
+    H = zeros(ComplexF64, 2L, 2L, Nq)
     Avec_pref = zeros(ComplexF64, Nobs, Na)
     disp = zeros(Float64, L, Nq)
     intensity = zeros(eltype(measure), L, Nq)
 
     for (iq, q) in enumerate(qpts.qs)
-        q_global = cryst.recipvecs * q
-        view(disp, :, iq) .= view(excitations!(T, H, swt, q), 1:L)
+        q_reshaped = to_reshaped_rlu(swt.sys, q)
+        dynamical_matrix!(view(H, :, :, iq), swt, q_reshaped)
+        for i in 1:L
+            T[i, i, iq] = 1
+            T[i+L, i+L, iq] = -1
+        end
+    end
 
+    for (iq, q) in enumerate(qpts.qs)
+        Hq = view(H,:,:,iq)
+        Tq = view(T,:,:,iq)
+
+        # Solve generalized eigenvalue problem, Ĩ t = λ H t, for columns t of T.
+        # Eigenvalues are sorted such that positive values appear first, and are
+        # otherwise ascending in absolute value.
+        sortby(x) = (-sign(x), abs(x))
+        λ, T0 = eigen!(Hermitian(Tq), Hermitian(Hq); sortby)
+
+        # Note that T0 and T refer to the same data.
+        @assert T0 === Tq
+
+        # Normalize columns of T so that para-unitarity holds, T† Ĩ T = Ĩ.
+        for j in axes(Tq, 2)
+            c = 1 / sqrt(abs(λ[j]))
+            view(Tq, :, j) .*= c
+        end
+
+        # Inverse of λ are eigenvalues of Ĩ H, or equivalently, of √H Ĩ √H.
+        energies = λ        # reuse storage
+        @. energies = 1 / λ
+
+        # By Sylvester's theorem, "inertia" (sign signature) is invariant under a
+        # congruence transform Ĩ → √H Ĩ √H. The first L elements are positive,
+        # while the next L elements are negative. Their absolute values are
+        # excitation energies for the wavevectors q and -q, respectively.
+        @assert all(>(0), view(energies, 1:L)) && all(<(0), view(energies, L+1:2L))
+
+        view(disp, :, iq) .= view(energies, 1:L)
+    end
+
+    for (iq, q) in enumerate(qpts.qs)
+        q_global = cryst.recipvecs * q
+        Tq = view(T,:,:,iq)
         for i in 1:Na, μ in 1:Nobs
             r_global = global_position(sys, (1, 1, 1, i)) # + offsets[μ, i]
             ff = get_swt_formfactor(measure, μ, i)
@@ -191,7 +231,7 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
             if sys.mode == :SUN
                 data = swt.data::SWTDataSUN
                 N = sys.Ns[1]
-                t = reshape(view(T, :, band), N-1, Na, 2)
+                t = reshape(view(Tq, :, band), N-1, Na, 2)
                 for i in 1:Na, μ in 1:Nobs
                     O = data.observables_localized[μ, i]
                     for α in 1:N-1
@@ -201,7 +241,7 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
             else
                 @assert sys.mode in (:dipole, :dipole_uncorrected)
                 data = swt.data::SWTDataDipole
-                t = reshape(view(T, :, band), Na, 2)
+                t = reshape(view(Tq, :, band), Na, 2)
                 for i in 1:Na, μ in 1:Nobs
                     O = data.observables_localized[μ, i]
                     # This is the Avec of the two transverse and one

@@ -1,5 +1,5 @@
 # Set the dynamical quadratic Hamiltonian matrix in dipole mode. 
-function swt_hamiltonian_dipole!(H::Matrix{ComplexF64}, swt::SpinWaveTheory, q_reshaped::Vec3)
+function swt_hamiltonian_dipole!(H::AbstractArray{ComplexF64, 2}, swt::SpinWaveTheory, q_reshaped::Vec3)
     (; sys, data) = swt
     (; local_rotations, stevens_coefs, sqrtS) = data
     (; extfield, gs) = sys
