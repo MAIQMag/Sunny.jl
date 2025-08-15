@@ -57,7 +57,7 @@ cryst = Crystal(latvecs, positions, 227; types=["Co"])
 # [`view_crystal`](@ref) launches an interface for interactive inspection and
 # symmetry analysis.
 
-view_crystal(cryst)
+#view_crystal(cryst)
 
 # ### Spin system
 
@@ -80,7 +80,7 @@ sys = System(cryst, [1 => Moment(s=3/2, g=2)], :dipole)
 
 J = +0.63 # (meV)
 set_exchange!(sys, J, Bond(2, 3, [0, 0, 0]))
-view_crystal(sys)
+#view_crystal(sys)
 
 # ### Optimizing spins
 
@@ -92,7 +92,7 @@ view_crystal(sys)
 
 randomize_spins!(sys)
 minimize_energy!(sys)
-plot_spins(sys; color=[S[3] for S in sys.dipoles])
+#plot_spins(sys; color=[S[3] for S in sys.dipoles])
 
 # The diamond lattice is bipartite, allowing each spin to perfectly anti-align
 # with its 4 nearest-neighbors. Each of these 4 bonds contribute ``-J s^2`` to
@@ -118,7 +118,7 @@ sys_prim = reshape_supercell(sys, shape)
 # Plotting `sys_prim` shows the two spins within the primitive cell, as well as
 # the larger conventional cubic cell for context.
 
-plot_spins(sys_prim; color=[S[3] for S in sys_prim.dipoles])
+#plot_spins(sys_prim; color=[S[3] for S in sys_prim.dipoles])
 
 # ### Spin wave theory
 
