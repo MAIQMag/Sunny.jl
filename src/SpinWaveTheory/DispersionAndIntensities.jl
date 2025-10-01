@@ -182,15 +182,28 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
         end
     end
 
+    #for (iq, q) in enumerate(qpts.qs)
+    #    Hq = view(H,:,:,iq)
+    #    Tq = view(T,:,:,iq)
+    #    # Solve generalized eigenvalue problem, Ĩ t = λ H t, for columns t of T.
+    #    tmp, T0 = eigen!(Hermitian(Tq), Hermitian(Hq))
+    #    view(evalues,:,iq) .= tmp
+
+    #    # Note that T0 and T refer to the same data.
+    #    @assert T0 === Tq
+    #end
+
     for (iq, q) in enumerate(qpts.qs)
         Hq = view(H,:,:,iq)
         Tq = view(T,:,:,iq)
         # Solve generalized eigenvalue problem, Ĩ t = λ H t, for columns t of T.
-        tmp, T0 = eigen!(Hermitian(Tq), Hermitian(Hq))
-        view(evalues,:,iq) .= tmp
-
-        # Note that T0 and T refer to the same data.
-        @assert T0 === Tq
+        C = cholesky(Hq)
+        CL_inv = inv(C.L)
+        CL_inv_t = conj(transpose(CL_inv))
+        tmp = CL_inv * Tq * CL_inv_t
+        E = eigen(tmp)
+        view(evalues,:,iq) .= E.values
+        Tq .= CL_inv_t * E.vectors
     end
 
     for (iq, q) in enumerate(qpts.qs)
