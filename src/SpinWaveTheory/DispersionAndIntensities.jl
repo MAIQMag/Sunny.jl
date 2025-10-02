@@ -189,12 +189,13 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     #end
 
     reduction = zeros(ComplexF64, 2L, 2L)
+    CL_inv_t = UpperTriangular(zeros(ComplexF64, 2L, 2L))
     for (iq, q) in enumerate(qpts.qs)
         Hq = view(H, :, :, iq)
         # Solve generalized eigenvalue problem, Ĩ t = λ H t, for columns t of T.
         C = cholesky!(Hq)
         CL_inv = LinearAlgebra.inv!(C.L)
-        CL_inv_t = copy(adjoint(CL_inv))
+        adjoint!(CL_inv_t, CL_inv)
         lmul!(-1., view(CL_inv, :, L+1:2L))
         mul!(reduction, CL_inv, CL_inv_t)
         E = eigen!(Hermitian(reduction))
