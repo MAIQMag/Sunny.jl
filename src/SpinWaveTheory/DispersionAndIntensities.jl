@@ -135,6 +135,20 @@ function dispersion(swt::SpinWaveTheory, qpts)
     return reshape(disp, L, size(qpts.qs)...)
 end
 
+
+function _set_identity(a)
+    L = size(a,1)
+    for j in 1:L
+        for i in 1:L
+            a[i,j] = 0.
+        end
+    end
+    for i in 1:L
+        a[i,i] = 1.
+    end
+end
+
+
 """
     intensities_bands(swt::SpinWaveTheory, qpts; kT=0)
 
@@ -187,15 +201,16 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     #    # Note that T0 and T refer to the same data.
     #    @assert T0 === Tq
     #end
-
+    identity = zeros(ComplexF64, 2L, 2L)
     reduction = zeros(ComplexF64, 2L, 2L)
     CL_inv_t = UpperTriangular(zeros(ComplexF64, 2L, 2L))
     for (iq, q) in enumerate(qpts.qs)
         Hq = view(H,:,:,iq)
         # Solve generalized eigenvalue problem, Ĩ t = λ H t, for columns t of T.
         C, info = LAPACK.potrf!('L', Hq)
-        _ = LAPACK.trtri!('L', 'N', Hq)
-        CL_inv = LowerTriangular(Hq)
+        _set_identity(identity)
+        BLAS.trsm!('L', 'L', 'N', 'N', ComplexF64(1.), Hq, identity)
+        CL_inv = LowerTriangular(identity)
         adjoint!(CL_inv_t, CL_inv)
         lmul!(-1., view(CL_inv,:,L+1:2L))
         mul!(reduction, CL_inv, CL_inv_t)
