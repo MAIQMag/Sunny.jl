@@ -179,7 +179,7 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     corrbuf = zeros(ComplexF64, Ncorr)
 
     # Preallocation
-    H = zeros(ComplexF64, 2L, 2L, Nq)
+    H = [] #zeros(ComplexF64, 2L, 2L, Nq)
     evalues = zeros(Float64, 2L, Nq)
     Avec_pref = zeros(ComplexF64, Nobs, Na)
     disp = zeros(Float64, L, Nq)
@@ -187,7 +187,14 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
 
     for (iq, q) in enumerate(qpts.qs)
         q_reshaped = to_reshaped_rlu(swt.sys, q)
-        dynamical_matrix!(view(H, :, :, iq), swt, q_reshaped)
+        tmp = zeros(ComplexF64, 2L, 2L)
+        dynamical_matrix!(tmp, swt, q_reshaped)
+        push!(H, tmp)
+    end
+
+    H_d = CuArray{ComplexF64, 2}[]
+    for i in 1:length(H)
+        push!(H_d, CuArray(H[i]))
     end
 
     #for (iq, q) in enumerate(qpts.qs)
@@ -201,15 +208,20 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     #    @assert T0 === Tq
     #end
 
-    for (iq, q) in enumerate(qpts.qs)
-        Hq = view(H,:,:,iq)
-        # Solve generalized eigenvalue problem, Ĩ t = λ H t, for columns t of T.
-        C, info = LAPACK.potrf!('L', Hq)
+    #for (iq, q) in enumerate(qpts.qs)
+    #    Hq = view(H,:,:,iq)
+    #    # Solve generalized eigenvalue problem, Ĩ t = λ H t, for columns t of T.
+    #    C, info = LAPACK.potrf!('L', Hq)
+    #end
+
+    CUSOLVER.potrfBatched!('L',H_d)
+    for i in 1:length(H)
+        copyto!(H[i], H_d[i])
     end
 
     identity = zeros(ComplexF64, 2L, 2L, Nq)
     for (iq, q) in enumerate(qpts.qs)
-        Hq = view(H,:,:,iq)
+        Hq = H[iq]
         Idq = view(identity,:,:,iq)
         _set_identity(Idq)
         BLAS.trsm!('L', 'L', 'N', 'N', ComplexF64(1.), Hq, Idq)
@@ -243,14 +255,14 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     end
 
     for (iq, q) in enumerate(qpts.qs)
-        Hq = view(H,:,:,iq)
+        Hq = H[iq]
         CL_inv_t_q = UpperTriangular(view(CL_inv_t,:,:,iq))
         E_vectors = view(reduction,:,:,iq)
         mul!(Hq, CL_inv_t_q, E_vectors)
     end
 
     for (iq, q) in enumerate(qpts.qs)
-        Hq = view(H,:,:,iq)
+        Hq = H[iq]
         λ = view(evalues,:,iq)
         # Normalize columns of T so that para-unitarity holds, T† Ĩ T = Ĩ.
         for j in axes(Hq, 2)
@@ -273,7 +285,7 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
 
     for (iq, q) in enumerate(qpts.qs)
         q_global = cryst.recipvecs * q
-        Hq = view(H,:,:,iq)
+        Hq = H[iq]
         for i in 1:Na, μ in 1:Nobs
             r_global = global_position(sys, (1, 1, 1, i)) # + offsets[μ, i]
             ff = get_swt_formfactor(measure, μ, i)
