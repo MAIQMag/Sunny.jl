@@ -208,42 +208,42 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     #    @assert T0 === Tq
     #end
 
-    #for (iq, q) in enumerate(qpts.qs)
-    #    Hq = view(H,:,:,iq)
-    #    # Solve generalized eigenvalue problem, Ĩ t = λ H t, for columns t of T.
-    #    C, info = LAPACK.potrf!('L', Hq)
-    #end
-
     CUSOLVER.potrfBatched!('L',H_d)
+
+    identity = []
     for i in 1:length(H)
-        copyto!(H[i], H_d[i])
+        tmp = zeros(ComplexF64, 2L, 2L)
+        _set_identity(tmp)
+        push!(identity,tmp)
     end
 
-    identity = zeros(ComplexF64, 2L, 2L, Nq)
-    for (iq, q) in enumerate(qpts.qs)
-        Hq = H[iq]
-        Idq = view(identity,:,:,iq)
-        _set_identity(Idq)
-        BLAS.trsm!('L', 'L', 'N', 'N', ComplexF64(1.), Hq, Idq)
+    I_d = CuArray{ComplexF64, 2}[]
+    for i in 1:length(H)
+        push!(I_d, identity[i])
+    end
+
+    CUBLAS.trsm_batched!('L', 'L', 'N', 'N', ComplexF64(1.), H_d, I_d)
+    for i in 1:length(H)
+        copyto!(identity[i], I_d[i])
     end
 
     CL_inv_t = zeros(ComplexF64, 2L, 2L, Nq)
     for (iq, q) in enumerate(qpts.qs)
-        Idq = view(identity,:,:,iq)
+        Idq = identity[iq]
         CL_inv = LowerTriangular(Idq)
         CL_inv_t_q = UpperTriangular(view(CL_inv_t,:,:,iq))
         adjoint!(CL_inv_t_q, CL_inv)
     end
 
     for (iq, q) in enumerate(qpts.qs)
-        CL_inv = LowerTriangular(view(identity,:,:,iq))
+        CL_inv = LowerTriangular(identity[iq])
         lmul!(-1., view(CL_inv,:,L+1:2L))
     end
 
     reduction = zeros(ComplexF64, 2L, 2L, Nq)
     for (iq, q) in enumerate(qpts.qs)
         redq = view(reduction,:,:,iq)
-        CL_inv = LowerTriangular(view(identity,:,:,iq))
+        CL_inv = LowerTriangular(identity[iq])
         CL_inv_t_q = UpperTriangular(view(CL_inv_t,:,:,iq))
         mul!(redq, CL_inv, CL_inv_t_q)
     end
