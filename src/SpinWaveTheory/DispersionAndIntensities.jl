@@ -1,3 +1,6 @@
+using CUDA
+using CUDA: i32
+
 # Bogoliubov transformation that diagonalizes a quadratic bosonic Hamiltonian,
 # allowing for anomalous terms. The general procedure derives from Colpa,
 # Physica A, 93A, 327-353 (1978). Overwrites data in H.
@@ -137,12 +140,8 @@ end
 
 
 function _set_identity(a)
+    a .= 0.
     L = size(a,1)
-    for j in 1:L
-        for i in 1:L
-            a[i,j] = 0.
-        end
-    end
     for i in 1:L
         a[i,i] = 1.
     end
@@ -201,22 +200,53 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     #    # Note that T0 and T refer to the same data.
     #    @assert T0 === Tq
     #end
-    identity = zeros(ComplexF64, 2L, 2L)
-    reduction = zeros(ComplexF64, 2L, 2L)
-    CL_inv_t = UpperTriangular(zeros(ComplexF64, 2L, 2L))
+
     for (iq, q) in enumerate(qpts.qs)
         Hq = view(H,:,:,iq)
         # Solve generalized eigenvalue problem, Ĩ t = λ H t, for columns t of T.
         C, info = LAPACK.potrf!('L', Hq)
-        _set_identity(identity)
-        BLAS.trsm!('L', 'L', 'N', 'N', ComplexF64(1.), Hq, identity)
-        CL_inv = LowerTriangular(identity)
-        adjoint!(CL_inv_t, CL_inv)
+    end
+
+    identity = zeros(ComplexF64, 2L, 2L, Nq)
+    for (iq, q) in enumerate(qpts.qs)
+        Hq = view(H,:,:,iq)
+        Idq = view(identity,:,:,iq)
+        _set_identity(Idq)
+        BLAS.trsm!('L', 'L', 'N', 'N', ComplexF64(1.), Hq, Idq)
+    end
+
+    CL_inv_t = zeros(ComplexF64, 2L, 2L, Nq)
+    for (iq, q) in enumerate(qpts.qs)
+        Idq = view(identity,:,:,iq)
+        CL_inv = LowerTriangular(Idq)
+        CL_inv_t_q = UpperTriangular(view(CL_inv_t,:,:,iq))
+        adjoint!(CL_inv_t_q, CL_inv)
+    end
+
+    for (iq, q) in enumerate(qpts.qs)
+        CL_inv = LowerTriangular(view(identity,:,:,iq))
         lmul!(-1., view(CL_inv,:,L+1:2L))
-        mul!(reduction, CL_inv, CL_inv_t)
-        E_values, E_vectors = LAPACK.syev!('V', 'L', reduction)
+    end
+
+    reduction = zeros(ComplexF64, 2L, 2L, Nq)
+    for (iq, q) in enumerate(qpts.qs)
+        redq = view(reduction,:,:,iq)
+        CL_inv = LowerTriangular(view(identity,:,:,iq))
+        CL_inv_t_q = UpperTriangular(view(CL_inv_t,:,:,iq))
+        mul!(redq, CL_inv, CL_inv_t_q)
+    end
+
+    for (iq, q) in enumerate(qpts.qs)
+        redq = view(reduction,:,:,iq)
+        E_values, _ = LAPACK.syev!('V', 'L', redq)
         view(evalues,:,iq) .= E_values
-        mul!(Hq, CL_inv_t, E_vectors)
+    end
+
+    for (iq, q) in enumerate(qpts.qs)
+        Hq = view(H,:,:,iq)
+        CL_inv_t_q = UpperTriangular(view(CL_inv_t,:,:,iq))
+        E_vectors = view(reduction,:,:,iq)
+        mul!(Hq, CL_inv_t_q, E_vectors)
     end
 
     for (iq, q) in enumerate(qpts.qs)

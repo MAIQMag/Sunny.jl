@@ -4,7 +4,9 @@ authors = ["The Sunny team"]
 version = "0.8.0"
 
 [deps]
+Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
 Brillouin = "23470ee3-d0df-4052-8b1a-8cbd6363e7f0"
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 CrystalInfoFramework = "6007d9b0-c6b2-11e8-0510-1d10e825f3f1"
 DynamicPolynomials = "7c1d4256-1411-5781-91ec-d7bc3513ac07"
 ElasticArrays = "fdbdab4c-e67f-52f5-8c3f-e7b388dad3d4"
