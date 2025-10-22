@@ -185,18 +185,6 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     disp = zeros(Float64, L, Nq)
     intensity = zeros(eltype(measure), L, Nq)
 
-    for (iq, q) in enumerate(qpts.qs)
-        q_reshaped = to_reshaped_rlu(swt.sys, q)
-        tmp = zeros(ComplexF64, 2L, 2L)
-        dynamical_matrix!(tmp, swt, q_reshaped)
-        push!(H, tmp)
-    end
-
-    H_d = CuArray{ComplexF64, 2}[]
-    for i in 1:length(H)
-        push!(H_d, CuArray(H[i]))
-    end
-
     #for (iq, q) in enumerate(qpts.qs)
     #    Hq = view(H,:,:,iq)
     #    Tq = view(T,:,:,iq)
@@ -208,23 +196,28 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     #    @assert T0 === Tq
     #end
 
-    CUSOLVER.potrfBatched!('L',H_d)
-
-    identity = []
-    for i in 1:length(H)
+    H_d = CuArray{ComplexF64, 2}[]
+    for (iq, q) in enumerate(qpts.qs)
+        q_reshaped = to_reshaped_rlu(swt.sys, q)
         tmp = zeros(ComplexF64, 2L, 2L)
-        _set_identity(tmp)
-        push!(identity,tmp)
+        dynamical_matrix!(tmp, swt, q_reshaped)
+        push!(H, tmp)
+        push!(H_d, CuArray(tmp))
     end
+
+    CUSOLVER.potrfBatched!('L',H_d)
 
     I_d = CuArray{ComplexF64, 2}[]
     for i in 1:length(H)
-        push!(I_d, identity[i])
+        tmp = zeros(ComplexF64, 2L, 2L)
+        _set_identity(tmp)
+        push!(I_d,CuArray(tmp))
     end
 
     CUBLAS.trsm_batched!('L', 'L', 'N', 'N', ComplexF64(1.), H_d, I_d)
-    for i in 1:length(H)
-        copyto!(identity[i], I_d[i])
+    identity = []
+    for i in 1:length(I_d)
+        push!(identity, Array(I_d[i]))
     end
 
     CL_inv_t = zeros(ComplexF64, 2L, 2L, Nq)
