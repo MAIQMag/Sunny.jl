@@ -140,13 +140,11 @@ end
 
 
 function _set_identity(a)
-    a .= 0.
-    L = size(a,1)
-    for i in 1:L
-        a[i,i] = 1.
+    iq = threadIdx().x
+    for i in 1:size(a,1)
+        a[i,i,iq] = 1.
     end
 end
-
 
 """
     intensities_bands(swt::SpinWaveTheory, qpts; kT=0)
@@ -179,7 +177,6 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     corrbuf = zeros(ComplexF64, Ncorr)
 
     # Preallocation
-    H = [] #zeros(ComplexF64, 2L, 2L, Nq)
     Avec_pref = zeros(ComplexF64, Nobs, Na)
     disp = zeros(Float64, L, Nq)
     intensity = zeros(eltype(measure), L, Nq)
@@ -195,47 +192,47 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     #    @assert T0 === Tq
     #end
 
-    H_d = CuArray{ComplexF64, 2}[]
+    H_dp = CuArray{ComplexF64, 2}[]
+    H_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
     for (iq, q) in enumerate(qpts.qs)
         q_reshaped = to_reshaped_rlu(swt.sys, q)
         tmp = zeros(ComplexF64, 2L, 2L)
         dynamical_matrix!(tmp, swt, q_reshaped)
-        push!(H, tmp)
-        push!(H_d, CuArray(tmp))
+        H_dq = view(H_d,:,:,iq)
+        copyto!(H_dq, tmp)
+        push!(H_dp, H_dq)
     end
 
-    CUSOLVER.potrfBatched!('L',H_d)
+    CUSOLVER.potrfBatched!('L', H_dp)
 
-    tmp = zeros(ComplexF64, 2L, 2L)
-    _set_identity(tmp)
-    I_d = CuArray{ComplexF64, 2}[]
-    for i in 1:length(H)
-        push!(I_d, CuArray(tmp))
+    I_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
+    I_dp = CuArray{ComplexF64, 2}[]
+    for i in 1:Nq
+        push!(I_dp, view(I_d,:,:,i))
     end
 
-    CUBLAS.trsm_batched!('L', 'L', 'N', 'N', ComplexF64(1.), H_d, I_d)
-    identity = []
-    for i in 1:length(I_d)
-        push!(identity, Array(I_d[i]))
-    end
+    CUDA.@cuda threads=Nq _set_identity(I_d)
+
+    CUBLAS.trsm_batched!('L', 'L', 'N', 'N', ComplexF64(1.), H_dp, I_dp)
+    identity = zeros(ComplexF64, 2L, 2L, Nq)
+    copyto!(identity, I_d)
 
     CL_inv_t = zeros(ComplexF64, 2L, 2L, Nq)
     for (iq, q) in enumerate(qpts.qs)
-        Idq = identity[iq]
-        CL_inv = LowerTriangular(Idq)
+        CL_inv = LowerTriangular(view(identity,:,:,iq))
         CL_inv_t_q = UpperTriangular(view(CL_inv_t,:,:,iq))
         adjoint!(CL_inv_t_q, CL_inv)
     end
 
     for (iq, q) in enumerate(qpts.qs)
-        CL_inv = LowerTriangular(identity[iq])
+        CL_inv = LowerTriangular(view(identity,:,:,iq))
         lmul!(-1., view(CL_inv,:,L+1:2L))
     end
 
     reduction = zeros(ComplexF64, 2L, 2L, Nq)
     for (iq, q) in enumerate(qpts.qs)
         redq = view(reduction,:,:,iq)
-        CL_inv = LowerTriangular(identity[iq])
+        CL_inv = LowerTriangular(view(identity,:,:,iq))
         CL_inv_t_q = UpperTriangular(view(CL_inv_t,:,:,iq))
         mul!(redq, CL_inv, CL_inv_t_q)
     end
@@ -245,15 +242,16 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     evalues = Array(evalues_d)
     reduction = Array(red_d)
 
+    H = zeros(ComplexF64, 2L, 2L, Nq)
     for (iq, q) in enumerate(qpts.qs)
-        Hq = H[iq]
+        Hq = view(H,:,:,iq)
         CL_inv_t_q = UpperTriangular(view(CL_inv_t,:,:,iq))
         E_vectors = view(reduction,:,:,iq)
         mul!(Hq, CL_inv_t_q, E_vectors)
     end
 
     for (iq, q) in enumerate(qpts.qs)
-        Hq = H[iq]
+        Hq = view(H,:,:,iq)
         λ = view(evalues,:,iq)
         # Normalize columns of T so that para-unitarity holds, T† Ĩ T = Ĩ.
         for j in axes(Hq, 2)
@@ -276,7 +274,7 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
 
     for (iq, q) in enumerate(qpts.qs)
         q_global = cryst.recipvecs * q
-        Hq = H[iq]
+        Hq = view(H,:,:,iq)
         for i in 1:Na, μ in 1:Nobs
             r_global = global_position(sys, (1, 1, 1, i)) # + offsets[μ, i]
             ff = get_swt_formfactor(measure, μ, i)
