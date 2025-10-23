@@ -180,7 +180,6 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
 
     # Preallocation
     H = [] #zeros(ComplexF64, 2L, 2L, Nq)
-    evalues = zeros(Float64, 2L, Nq)
     Avec_pref = zeros(ComplexF64, Nobs, Na)
     disp = zeros(Float64, L, Nq)
     intensity = zeros(eltype(measure), L, Nq)
@@ -207,11 +206,11 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
 
     CUSOLVER.potrfBatched!('L',H_d)
 
+    tmp = zeros(ComplexF64, 2L, 2L)
+    _set_identity(tmp)
     I_d = CuArray{ComplexF64, 2}[]
     for i in 1:length(H)
-        tmp = zeros(ComplexF64, 2L, 2L)
-        _set_identity(tmp)
-        push!(I_d,CuArray(tmp))
+        push!(I_d, CuArray(tmp))
     end
 
     CUBLAS.trsm_batched!('L', 'L', 'N', 'N', ComplexF64(1.), H_d, I_d)
@@ -241,11 +240,10 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
         mul!(redq, CL_inv, CL_inv_t_q)
     end
 
-    for (iq, q) in enumerate(qpts.qs)
-        redq = view(reduction,:,:,iq)
-        E_values, _ = LAPACK.syev!('V', 'L', redq)
-        view(evalues,:,iq) .= E_values
-    end
+    red_d = CuArray(reduction)
+    evalues_d , _ = CUSOLVER.heevjBatched!('V', 'L', red_d)
+    evalues = Array(evalues_d)
+    reduction = Array(red_d)
 
     for (iq, q) in enumerate(qpts.qs)
         Hq = H[iq]
