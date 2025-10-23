@@ -138,11 +138,20 @@ function dispersion(swt::SpinWaveTheory, qpts)
     return reshape(disp, L, size(qpts.qs)...)
 end
 
-
 function _set_identity(a)
     iq = threadIdx().x
     for i in 1:size(a,1)
         a[i,i,iq] = 1.
+    end
+end
+
+function _set_zero(a)
+    iq = threadIdx().x
+    L = size(a,1)
+    for j in 1:L
+        for i in 1:j-1
+            a[i,j,iq] = 0.
+        end
     end
 end
 
@@ -192,8 +201,8 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     #    @assert T0 === Tq
     #end
 
-    H_dp = CuArray{ComplexF64, 2}[]
     H_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
+    H_dp = CuArray{ComplexF64, 2}[]
     for (iq, q) in enumerate(qpts.qs)
         q_reshaped = to_reshaped_rlu(swt.sys, q)
         tmp = zeros(ComplexF64, 2L, 2L)
@@ -214,41 +223,22 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     CUDA.@cuda threads=Nq _set_identity(I_d)
 
     CUBLAS.trsm_batched!('L', 'L', 'N', 'N', ComplexF64(1.), H_dp, I_dp)
-    identity = zeros(ComplexF64, 2L, 2L, Nq)
-    copyto!(identity, I_d)
 
-    CL_inv_t = zeros(ComplexF64, 2L, 2L, Nq)
-    for (iq, q) in enumerate(qpts.qs)
-        CL_inv = LowerTriangular(view(identity,:,:,iq))
-        CL_inv_t_q = UpperTriangular(view(CL_inv_t,:,:,iq))
-        adjoint!(CL_inv_t_q, CL_inv)
-    end
+    CUDA.@cuda threads=Nq _set_zero(I_d)
 
-    for (iq, q) in enumerate(qpts.qs)
-        CL_inv = LowerTriangular(view(identity,:,:,iq))
-        lmul!(-1., view(CL_inv,:,L+1:2L))
-    end
+    CL_inv_t_d = deepcopy(I_d)
 
-    reduction = zeros(ComplexF64, 2L, 2L, Nq)
-    for (iq, q) in enumerate(qpts.qs)
-        redq = view(reduction,:,:,iq)
-        CL_inv = LowerTriangular(view(identity,:,:,iq))
-        CL_inv_t_q = UpperTriangular(view(CL_inv_t,:,:,iq))
-        mul!(redq, CL_inv, CL_inv_t_q)
-    end
+    view(I_d,:,L+1:2L,:) .= -1. * view(I_d,:,L+1:2L,:)
 
-    red_d = CuArray(reduction)
+    red_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
+    CUDA.CUBLAS.gemm_strided_batched!('N', 'C', ComplexF64(1.), I_d, CL_inv_t_d, ComplexF64(0.), red_d)
+
     evalues_d , _ = CUSOLVER.heevjBatched!('V', 'L', red_d)
-    evalues = Array(evalues_d)
-    reduction = Array(red_d)
 
-    H = zeros(ComplexF64, 2L, 2L, Nq)
-    for (iq, q) in enumerate(qpts.qs)
-        Hq = view(H,:,:,iq)
-        CL_inv_t_q = UpperTriangular(view(CL_inv_t,:,:,iq))
-        E_vectors = view(reduction,:,:,iq)
-        mul!(Hq, CL_inv_t_q, E_vectors)
-    end
+    CUDA.CUBLAS.gemm_strided_batched!('C', 'N', ComplexF64(1.), CL_inv_t_d, red_d, ComplexF64(0.), H_d)
+
+    evalues = Array(evalues_d)
+    H = Array(H_d)
 
     for (iq, q) in enumerate(qpts.qs)
         Hq = view(H,:,:,iq)
