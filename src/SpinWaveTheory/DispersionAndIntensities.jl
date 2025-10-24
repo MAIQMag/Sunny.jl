@@ -223,6 +223,7 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
         CUBLAS.trsm_batched!('L', 'L', 'N', 'N', ComplexF64(1.), H_dp, I_dp)
 
         evalues_d , _ = CUSOLVER.heevjBatched!('V', 'L', I_d)
+
         CUBLAS.trsm_batched!('L', 'L', 'C', 'N', ComplexF64(1.), H_dp, I_dp)
     end
 
