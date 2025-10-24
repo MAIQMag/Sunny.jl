@@ -215,37 +215,38 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
         H_dq = view(H_d,:,:,iq)
         copyto!(H_dq, tmp)
     end
-    H_dp = [view(H_d,:,:,i) for i in 1:Nq]
 
-    CUSOLVER.potrfBatched!('L', H_dp)
+    @time begin
+        H_dp = [view(H_d,:,:,i) for i in 1:Nq]
+        CUSOLVER.potrfBatched!('L', H_dp)
 
-    I_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
-    I_dp = [view(I_d,:,:,i) for i in 1:Nq]
+        I_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
+        kernel = @cuda launch=false _set_identity(I_d)
+        config = launch_configuration(kernel.fun)
+        threads = Base.min(Nq, config.threads)
+        blocks = cld(Nq, threads)
+        kernel(I_d; threads=threads, blocks=blocks)
 
-    kernel = @cuda launch=false _set_identity(I_d)
-    config = launch_configuration(kernel.fun)
-    threads = Base.min(Nq, config.threads)
-    blocks = cld(Nq, threads)
-    kernel(I_d; threads=threads, blocks=blocks)
+        I_dp = [view(I_d,:,:,i) for i in 1:Nq]
+        CUBLAS.trsm_batched!('L', 'L', 'N', 'N', ComplexF64(1.), H_dp, I_dp)
 
-    CUBLAS.trsm_batched!('L', 'L', 'N', 'N', ComplexF64(1.), H_dp, I_dp)
+        kernel = @cuda launch=false _set_zero(I_d)
+        config = launch_configuration(kernel.fun)
+        threads = Base.min(Nq, config.threads)
+        blocks = cld(Nq, threads)
+        kernel(I_d; threads=threads, blocks=blocks)
 
-    kernel = @cuda launch=false _set_zero(I_d)
-    config = launch_configuration(kernel.fun)
-    threads = Base.min(Nq, config.threads)
-    blocks = cld(Nq, threads)
-    kernel(I_d; threads=threads, blocks=blocks)
+        CL_inv_t_d = deepcopy(I_d)
 
-    CL_inv_t_d = deepcopy(I_d)
+        view(I_d,:,L+1:2L,:) .= -1. * view(I_d,:,L+1:2L,:)
 
-    view(I_d,:,L+1:2L,:) .= -1. * view(I_d,:,L+1:2L,:)
+        red_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
+        CUDA.CUBLAS.gemm_strided_batched!('N', 'C', ComplexF64(1.), I_d, CL_inv_t_d, ComplexF64(0.), red_d)
 
-    red_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
-    CUDA.CUBLAS.gemm_strided_batched!('N', 'C', ComplexF64(1.), I_d, CL_inv_t_d, ComplexF64(0.), red_d)
+        evalues_d , _ = CUSOLVER.heevjBatched!('V', 'L', red_d)
 
-    evalues_d , _ = CUSOLVER.heevjBatched!('V', 'L', red_d)
-
-    CUDA.CUBLAS.gemm_strided_batched!('C', 'N', ComplexF64(1.), CL_inv_t_d, red_d, ComplexF64(0.), H_d)
+        CUDA.CUBLAS.gemm_strided_batched!('C', 'N', ComplexF64(1.), CL_inv_t_d, red_d, ComplexF64(0.), H_d)
+    end
 
     evalues = Array(evalues_d)
     H = Array(H_d)

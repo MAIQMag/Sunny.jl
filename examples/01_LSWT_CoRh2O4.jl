@@ -145,7 +145,7 @@ kernel = lorentzian(fwhm=0.8)
 # of 500 ``𝐪``-points will be sampled along the path.
 
 qs = [[0, 0, 0], [1/2, 0, 0], [1/2, 1/2, 0], [0, 0, 0]]
-path = q_space_path(cryst, qs, 500)
+path = q_space_path(cryst, qs, 50000)
 
 # Calculate single-crystal scattering [`intensities`](@ref) along this path, for
 # energies between 0 and 6 meV. Use [`plot_intensities`](@ref) to visualize the
