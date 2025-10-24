@@ -143,21 +143,12 @@ function _set_identity(a)
     if iq > size(a,3)
         return
     end
-    for i in 1:size(a,1)
+    L = div(size(a,1), 2)
+    for i in 1:L
         a[i,i,iq] = 1.
     end
-end
-
-function _set_zero(a)
-    iq = threadIdx().x + (blockIdx().x - 1) * blockDim().x
-    if iq > size(a,3)
-        return
-    end
-    L = size(a,1)
-    for j in 1:L
-        for i in 1:j-1
-            a[i,j,iq] = 0.
-        end
+    for i in L+1:2L
+        a[i,i,iq] = -1.
     end
 end
 
@@ -228,28 +219,15 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
         kernel(I_d; threads=threads, blocks=blocks)
 
         I_dp = [view(I_d,:,:,i) for i in 1:Nq]
+        CUBLAS.trsm_batched!('R', 'L', 'C', 'N', ComplexF64(1.), H_dp, I_dp)
         CUBLAS.trsm_batched!('L', 'L', 'N', 'N', ComplexF64(1.), H_dp, I_dp)
 
-        kernel = @cuda launch=false _set_zero(I_d)
-        config = launch_configuration(kernel.fun)
-        threads = Base.min(Nq, config.threads)
-        blocks = cld(Nq, threads)
-        kernel(I_d; threads=threads, blocks=blocks)
-
-        CL_inv_t_d = deepcopy(I_d)
-
-        view(I_d,:,L+1:2L,:) .= -1. * view(I_d,:,L+1:2L,:)
-
-        red_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
-        CUDA.CUBLAS.gemm_strided_batched!('N', 'C', ComplexF64(1.), I_d, CL_inv_t_d, ComplexF64(0.), red_d)
-
-        evalues_d , _ = CUSOLVER.heevjBatched!('V', 'L', red_d)
-
-        CUDA.CUBLAS.gemm_strided_batched!('C', 'N', ComplexF64(1.), CL_inv_t_d, red_d, ComplexF64(0.), H_d)
+        evalues_d , _ = CUSOLVER.heevjBatched!('V', 'L', I_d)
+        CUBLAS.trsm_batched!('L', 'L', 'C', 'N', ComplexF64(1.), H_dp, I_dp)
     end
 
     evalues = Array(evalues_d)
-    H = Array(H_d)
+    H = Array(I_d)
 
     for (iq, q) in enumerate(qpts.qs)
         Hq = view(H,:,:,iq)
