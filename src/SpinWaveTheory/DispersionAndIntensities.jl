@@ -139,14 +139,20 @@ function dispersion(swt::SpinWaveTheory, qpts)
 end
 
 function _set_identity(a)
-    iq = threadIdx().x
+    iq = threadIdx().x + (blockIdx().x - 1) * blockDim().x
+    if iq > size(a,3)
+        return
+    end
     for i in 1:size(a,1)
         a[i,i,iq] = 1.
     end
 end
 
 function _set_zero(a)
-    iq = threadIdx().x
+    iq = threadIdx().x + (blockIdx().x - 1) * blockDim().x
+    if iq > size(a,3)
+        return
+    end
     L = size(a,1)
     for j in 1:L
         for i in 1:j-1
@@ -202,29 +208,33 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     #end
 
     H_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
-    H_dp = CuArray{ComplexF64, 2}[]
+    tmp = zeros(ComplexF64, 2L, 2L)
     for (iq, q) in enumerate(qpts.qs)
         q_reshaped = to_reshaped_rlu(swt.sys, q)
-        tmp = zeros(ComplexF64, 2L, 2L)
         dynamical_matrix!(tmp, swt, q_reshaped)
         H_dq = view(H_d,:,:,iq)
         copyto!(H_dq, tmp)
-        push!(H_dp, H_dq)
     end
+    H_dp = [view(H_d,:,:,i) for i in 1:Nq]
 
     CUSOLVER.potrfBatched!('L', H_dp)
 
     I_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
-    I_dp = CuArray{ComplexF64, 2}[]
-    for i in 1:Nq
-        push!(I_dp, view(I_d,:,:,i))
-    end
+    I_dp = [view(I_d,:,:,i) for i in 1:Nq]
 
-    CUDA.@cuda threads=Nq _set_identity(I_d)
+    kernel = @cuda launch=false _set_identity(I_d)
+    config = launch_configuration(kernel.fun)
+    threads = Base.min(Nq, config.threads)
+    blocks = cld(Nq, threads)
+    kernel(I_d; threads=threads, blocks=blocks)
 
     CUBLAS.trsm_batched!('L', 'L', 'N', 'N', ComplexF64(1.), H_dp, I_dp)
 
-    CUDA.@cuda threads=Nq _set_zero(I_d)
+    kernel = @cuda launch=false _set_zero(I_d)
+    config = launch_configuration(kernel.fun)
+    threads = Base.min(Nq, config.threads)
+    blocks = cld(Nq, threads)
+    kernel(I_d; threads=threads, blocks=blocks)
 
     CL_inv_t_d = deepcopy(I_d)
 
