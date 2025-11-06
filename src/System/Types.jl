@@ -99,6 +99,22 @@ struct Ewald
     ift_plan :: rIFTPlan
 end
 
+struct EwaldDevice
+    μ0_μB²   :: Float64               # Strength of dipole-dipole interactions
+    demag    :: Mat3                  # Demagnetization factor
+    A        :: CUDA.CuArray{Mat3, 5}        # Interaction matrices in real-space         [offset+1,i,j]
+end
+
+EwaldDevice(host::Ewald) = EwaldDevice(μ0_μB², demag, CUDA.CuArray(host.A))
+EwaldDevice(host::Nothing) = Nothing()
+
+function Adapt.adapt_structure(to, sys::EwaldDevice)
+    μ0_μB² = Adapt.adapt_structure(to, sys.μ0_μB²)
+    demag = Adapt.adapt_structure(to, sys.demag)
+    A = Adapt.adapt_structure(to, sys.A)
+    EwaldDevice(μ0_μB², demag, A)
+end
+
 mutable struct System{N}
     const origin           :: Union{Nothing, System{N}} # System for the original chemical cell
     const mode             :: Symbol                    # :SUN, :dipole, or :dipole_uncorrected
@@ -134,6 +150,7 @@ struct SystemDevice{TArrField, TArrInt, TArrGs}
     extfield           :: TArrField # External B field
     interactions_union :: TArrInt # Interactions
     gs                 :: TArrGs # g-tensor per atom in unit cell
+    #ewald              :: Union{EwaldDevice, Nothing}
 end
 
 SystemDevice(host::System) = SystemDevice(CUDA.CuArray(host.extfield), CUDA.CuArray(map(op -> InteractionsDevice(op), host.interactions_union)), CUDA.CuArray(host.gs))
@@ -142,5 +159,6 @@ function Adapt.adapt_structure(to, sys::SystemDevice)
     extfield = Adapt.adapt_structure(to, sys.extfield)
     interactions_union = Adapt.adapt_structure(to, sys.interactions_union)
     gs = Adapt.adapt_structure(to, sys.gs)
+    #ewald = Adapt.adapt_structure(to, sys.ewald)
     SystemDevice(extfield, interactions_union, gs)
 end

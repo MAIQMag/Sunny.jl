@@ -163,19 +163,23 @@ function _dot(a, b)
     return a[1]*b[1] + a[2]*b[2] + a[3]*b[3]    
 end
 
-function fill_matrix(H, swt, qs_reshaped, L) # gs, extfield, local_rotations, stevens_coefs, sqrtS, int_pair)
+function fill_matrix(H, swt, qs_reshaped, L)
+    iq = threadIdx().x + (blockIdx().x - 1) * blockDim().x
+    if iq > size(H, 3)
+        return
+    end
+
+    Hq = @view H[:, :, iq]
+    H11 = @view Hq[1:L, 1:L]
+    H12 = @view Hq[1:L, L+1:2L]
+    H21 = @view Hq[L+1:2L, 1:L]
+    H22 = @view Hq[L+1:2L, L+1:2L]
+
+    q_reshaped = @view qs_reshaped[:,iq]
+
     (; sys, data) = swt
     (; local_rotations, stevens_coefs, sqrtS) = data
     (; extfield, gs) = sys
-
-    iq = threadIdx().x + (blockIdx().x - 1) * blockDim().x
-
-    H11 = @view H[1:L, 1:L, iq]
-    H12 = @view H[1:L, L+1:2L, iq]
-    H21 = @view H[L+1:2L, 1:L, iq]
-    H22 = @view H[L+1:2L, L+1:2L, iq]
-
-    q_reshaped = @view qs_reshaped[:,iq]
 
     for (i, int) in enumerate(sys.interactions_union)
         # Zeeman term
@@ -227,7 +231,7 @@ function fill_matrix(H, swt, qs_reshaped, L) # gs, extfield, local_rotations, st
                 H22[i, i] -= sj * J[3, 3]
                 H22[j, j] -= si * J[3, 3]
             end
-#=
+
             # Biquadratic exchange
             if !iszero(coupling.biquad)
                 K = coupling.biquad  # Transformed quadrupole exchange matrix
@@ -255,9 +259,14 @@ function fill_matrix(H, swt, qs_reshaped, L) # gs, extfield, local_rotations, st
                 H21[j, i] += P * conj(phase)
                 H12[i, j] += conj(P) * phase
             end
-=#
         end
     end
+
+    # H must be hermitian up to round-off errors
+    @assert diffnorm2(Hq, Hq') < 1e-12
+
+    # Make H exactly hermitian
+    hermitianpart!(Hq)
 
     # Add small constant shift for positive-definiteness
     for i in 1:2L
@@ -273,10 +282,7 @@ function swt_hamiltonian_dipole!(H::CUDA.CuArray{ComplexF64, 3}, swt::SpinWaveTh
     @assert size(H, 3) == Nq
     @assert size(view(H,:,:,1)) == (2L, 2L)
 
-    # Initialize Hamiltonian buffer 
-    # Note that H11 for b†b, H22 for bb†, H12 for b†b†, and H21 for bb
     H .= 0.0
-
     @assert isnothing(swt.sys.ewald)
     swt_device = SpinWaveTheoryDevice(swt)
 
@@ -285,11 +291,7 @@ function swt_hamiltonian_dipole!(H::CUDA.CuArray{ComplexF64, 3}, swt::SpinWaveTh
     threads = Base.min(Nq, config.threads)
     blocks = cld(Nq, threads)
     kernel(H, swt_device, qs_reshaped, L; threads=threads, blocks=blocks)
-
-    # @assert diffnorm2_cuda(H, H') < 1e-12
-    # hermitianpart!(H)
 end
-
 
 function multiply_by_hamiltonian_dipole!(y::AbstractMatrix{ComplexF64}, x::AbstractMatrix{ComplexF64}, swt::SpinWaveTheory, qs_reshaped::Vector{Vec3};
                                          phases=zeros(ComplexF64, size(qs_reshaped)))
