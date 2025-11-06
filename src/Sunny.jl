@@ -21,6 +21,9 @@ import RowEchelon: rref!
 import MatInt
 import Brillouin
 
+import CUDA
+import Adapt
+
 include("MathBasics.jl")
 
 include("Operators/Spin.jl")

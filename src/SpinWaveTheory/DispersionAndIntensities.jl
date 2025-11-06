@@ -198,14 +198,23 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     #    @assert T0 === Tq
     #end
 
-    H_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
-    tmp = zeros(ComplexF64, 2L, 2L)
+    qs_reshaped = zeros(Float64, 3, Nq)
     for (iq, q) in enumerate(qpts.qs)
-        q_reshaped = to_reshaped_rlu(swt.sys, q)
-        dynamical_matrix!(tmp, swt, q_reshaped)
-        H_dq = view(H_d,:,:,iq)
-        copyto!(H_dq, tmp)
+        view(qs_reshaped, :, iq) .= to_reshaped_rlu(swt.sys, q)
     end
+
+    H_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
+    qs_reshaped_d = CuArray(qs_reshaped)
+    dynamical_matrix!(H_d, swt, qs_reshaped_d)
+
+    #tmp = zeros(ComplexF64, 2L, 2L)
+    #for (iq, q) in enumerate(qpts.qs)
+    #    q_reshaped = to_reshaped_rlu(swt.sys, q)
+    #    @assert isapprox(view(qs_reshaped,:,iq), q_reshaped, atol=1e-6)
+    #    dynamical_matrix!(tmp, swt, q_reshaped)
+    #    H_dq = view(H_d,:,:,iq)
+    #    copyto!(H_dq, tmp)
+    #end
 
     @time begin
         H_dp = [view(H_d,:,:,i) for i in 1:Nq]
