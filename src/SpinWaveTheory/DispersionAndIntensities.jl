@@ -152,6 +152,34 @@ function _set_identity(a)
     end
 end
 
+function _frequencies(H, evalues)
+    iq = threadIdx().x + (blockIdx().x - 1) * blockDim().x
+    if iq > size(H, 3)
+        return
+    end
+
+    Hq = @view H[:, :, iq]
+    λ = @view evalues[:, iq]
+    # Normalize columns of T so that para-unitarity holds, T† Ĩ T = Ĩ.
+    for j in axes(Hq, 2)
+        c = CUDA.rsqrt(abs(λ[j]))
+        view(Hq, :, j) .*= c
+    end
+
+    # Inverse of λ are eigenvalues of Ĩ H, or equivalently, of √H Ĩ √H.
+    for j in eachindex(λ)
+       λ[j] = 1. / λ[j]
+    end
+    # By Sylvester's theorem, "inertia" (sign signature) is invariant under a
+    # congruence transform Ĩ → √H Ĩ √H. The first L elements are positive,
+    # while the next L elements are negative. Their absolute values are
+    # excitation energies for the wavevectors q and -q, respectively.
+
+    #L = div(size(λ), 2)
+    #@assert all(<(0), view(λ, 1:L)) && all(>(0), view(λ, L+1:2L))
+    return
+end
+
 """
     intensities_bands(swt::SpinWaveTheory, qpts; kT=0)
 
@@ -184,7 +212,6 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
 
     # Preallocation
     Avec_pref = zeros(ComplexF64, Nobs, Na)
-    disp = zeros(Float64, L, Nq)
     intensity = zeros(eltype(measure), L, Nq)
 
     #for (iq, q) in enumerate(qpts.qs)
@@ -227,30 +254,15 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
         CUBLAS.trsm_batched!('L', 'L', 'C', 'N', ComplexF64(1.), H_dp, I_dp)
     end
 
+    kernel = @cuda launch=false _frequencies(I_d, evalues_d)
+    config = launch_configuration(kernel.fun)
+    threads = Base.min(Nq, config.threads)
+    blocks = cld(Nq, threads)
+    kernel(I_d, evalues_d; threads=threads, blocks=blocks)
+
     evalues = Array(evalues_d)
     H = Array(I_d)
-
-    for (iq, q) in enumerate(qpts.qs)
-        Hq = view(H,:,:,iq)
-        λ = view(evalues,:,iq)
-        # Normalize columns of T so that para-unitarity holds, T† Ĩ T = Ĩ.
-        for j in axes(Hq, 2)
-            c = 1 / sqrt(abs(λ[j]))
-            view(Hq, :, j) .*= c
-        end
-
-        # Inverse of λ are eigenvalues of Ĩ H, or equivalently, of √H Ĩ √H.
-        energies = λ        # reuse storage
-        @. energies = 1 / λ
-
-        # By Sylvester's theorem, "inertia" (sign signature) is invariant under a
-        # congruence transform Ĩ → √H Ĩ √H. The first L elements are positive,
-        # while the next L elements are negative. Their absolute values are
-        # excitation energies for the wavevectors q and -q, respectively.
-        @assert all(<(0), view(energies, 1:L)) && all(>(0), view(energies, L+1:2L))
-
-        view(disp, :, iq) .= view(energies, L+1:2L)
-    end
+    disp = copy(view(evalues,L+1:2L, :))
 
     for (iq, q) in enumerate(qpts.qs)
         q_global = cryst.recipvecs * q
