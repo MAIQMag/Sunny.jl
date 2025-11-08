@@ -273,13 +273,15 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
         end
     end
 
-    corrbuf = zeros(ComplexF64, Ncorr)
+    corrbuf = zeros(ComplexF64, Ncorr, Nq)
+    Avec = zeros(ComplexF64, Nobs, Nq)
     for (iq, q) in enumerate(qpts.qs)
-        Avec = zeros(ComplexF64, Nobs)
         Hq = view(H,:,:,iq)
+        Avecq = view(Avec,:,iq)
+        corrbufq = view(corrbuf,:,iq)
         # Fill `intensity` array
         for band in 1:L
-            fill!(Avec, 0)
+            fill!(Avecq, 0)
             @assert sys.mode in (:dipole, :dipole_uncorrected)
             data = swt.data::SWTDataDipole
             t = reshape(view(Hq, :, band+L), Na, 2)
@@ -290,14 +292,16 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
                 # local frame, z is longitudinal, and we are computing
                 # the transverse part only, so the last entry is zero)
                 displacement_local_frame = SA[t[i, 2] + t[i, 1], im * (t[i, 2] - t[i, 1]), 0.0]
-                Avec[μ] += Avec_pref[μ, i, iq] * (data.sqrtS[i]/√2) * (O' * displacement_local_frame)[1]
+                Avecq[μ] += Avec_pref[μ, i, iq] * (data.sqrtS[i]/√2) * (O' * displacement_local_frame)[1]
             end
 
-            map!(corrbuf, measure.corr_pairs) do (μ, ν)
-                Avec[μ] * conj(Avec[ν]) / Ncells
+            for idx in eachindex(corrbufq)
+                (μ, ν) = measure.corr_pairs[idx]
+                corrbufq[idx] = Avecq[μ] * conj(Avecq[ν]) / Ncells
             end
+
             q_global = cryst.recipvecs * q
-            intensity[band, iq] = thermal_prefactor(disp[band, iq]; kT) * measure.combiner(q_global, corrbuf)
+            intensity[band, iq] = thermal_prefactor(disp[band, iq]; kT) * measure.combiner(q_global, corrbufq)
         end
     end
 

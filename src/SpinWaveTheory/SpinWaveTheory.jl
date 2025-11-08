@@ -5,19 +5,21 @@ struct SWTDataDipole
     sqrtS                 :: Vector{Float64}          # Square root of spin magnitudes
 end
 
-struct SWTDataDipoleDevice{TVecRot, TVecCoef, TVecS}
+struct SWTDataDipoleDevice{TVecRot, TArrObs, TVecCoef, TVecS}
     local_rotations       :: TVecRot  # Rotations from global to quantization frame
+    observables_localized :: TArrObs
     stevens_coefs         :: TVecCoef # Rotated onsite coupling as Steven expansion
     sqrtS                 :: TVecS    # Square root of spin magnitudes
 end
 
-SWTDataDipoleDevice(host::SWTDataDipole) = SWTDataDipoleDevice(CUDA.CuVector(host.local_rotations), CUDA.CuVector(host.stevens_coefs), CUDA.CuVector(host.sqrtS))
+SWTDataDipoleDevice(host::SWTDataDipole) = SWTDataDipoleDevice(CUDA.CuVector(host.local_rotations), CUDA.CuArray(host.observables_localized), CUDA.CuVector(host.stevens_coefs), CUDA.CuVector(host.sqrtS))
 
 function Adapt.adapt_structure(to, data::SWTDataDipoleDevice)
     local_rotations = Adapt.adapt_structure(to, data.local_rotations)
+    observables_localized = Adapt.adapt_structure(to, data.observables_localized)
     stevens_coefs = Adapt.adapt_structure(to, data.stevens_coefs)
     sqrtS = Adapt.adapt_structure(to, data.sqrtS)
-    SWTDataDipoleDevice(local_rotations, stevens_coefs, sqrtS)
+    SWTDataDipoleDevice(local_rotations, observables_localized, stevens_coefs, sqrtS)
 end
 
 struct SWTDataSUN
