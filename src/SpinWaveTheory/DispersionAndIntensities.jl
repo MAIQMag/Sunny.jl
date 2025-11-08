@@ -208,7 +208,6 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     # Temporary storage for pair correlations
     Nobs = num_observables(measure)
     Ncorr = num_correlations(measure)
-    corrbuf = zeros(ComplexF64, Ncorr)
 
 
     #for (iq, q) in enumerate(qpts.qs)
@@ -274,7 +273,8 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
         end
     end
 
-    for iq in eachindex(qpts.qs)
+    corrbuf = zeros(ComplexF64, Ncorr)
+    for (iq, q) in enumerate(qpts.qs)
         Avec = zeros(ComplexF64, Nobs)
         Hq = view(H,:,:,iq)
         # Fill `intensity` array
@@ -296,6 +296,7 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
             map!(corrbuf, measure.corr_pairs) do (μ, ν)
                 Avec[μ] * conj(Avec[ν]) / Ncells
             end
+            q_global = cryst.recipvecs * q
             intensity[band, iq] = thermal_prefactor(disp[band, iq]; kT) * measure.combiner(q_global, corrbuf)
         end
     end
