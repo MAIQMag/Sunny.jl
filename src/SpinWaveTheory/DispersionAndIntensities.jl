@@ -262,17 +262,19 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     disp = copy(view(evalues,L+1:2L, :))
 
     # Preallocation
-    Avec_pref = zeros(ComplexF64, Nobs, Na)
+    Avec_pref = zeros(ComplexF64, Nobs, Na, Nq)
     intensity = zeros(eltype(measure), L, Nq)
     for (iq, q) in enumerate(qpts.qs)
         q_global = cryst.recipvecs * q
         for i in 1:Na, μ in 1:Nobs
             r_global = global_position(sys, (1, 1, 1, i)) # + offsets[μ, i]
             ff = get_swt_formfactor(measure, μ, i)
-            Avec_pref[μ, i] = exp(- im * dot(q_global, r_global))
-            Avec_pref[μ, i] *= compute_form_factor(ff, norm2(q_global))
+            Avec_pref[μ, i, iq] = exp(- im * dot(q_global, r_global))
+            Avec_pref[μ, i, iq] *= compute_form_factor(ff, norm2(q_global))
         end
+    end
 
+    for iq in eachindex(qpts.qs)
         Avec = zeros(ComplexF64, Nobs)
         Hq = view(H,:,:,iq)
         # Fill `intensity` array
@@ -288,7 +290,7 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
                 # local frame, z is longitudinal, and we are computing
                 # the transverse part only, so the last entry is zero)
                 displacement_local_frame = SA[t[i, 2] + t[i, 1], im * (t[i, 2] - t[i, 1]), 0.0]
-                Avec[μ] += Avec_pref[μ, i] * (data.sqrtS[i]/√2) * (O' * displacement_local_frame)[1]
+                Avec[μ] += Avec_pref[μ, i, iq] * (data.sqrtS[i]/√2) * (O' * displacement_local_frame)[1]
             end
 
             map!(corrbuf, measure.corr_pairs) do (μ, ν)
