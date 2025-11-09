@@ -26,17 +26,17 @@ struct MeasureSpec{Op <: Union{Vec3, HermitianC64}, F, Ret}
     end
 end
 
-struct MeasureSpecDevice{E} #, F}
+struct MeasureSpecDevice{E, F}
     corr_pairs :: E # (ncorr)
-    #combiner   :: F # (q::Vec3, obs) -> Ret
+    combiner   :: F # (q::Vec3, obs) -> Ret
 end
 
-MeasureSpecDevice(host::MeasureSpec) = MeasureSpecDevice(CUDA.CuVector(host.corr_pairs))#, host.combiner) 
+MeasureSpecDevice(host::MeasureSpec) = MeasureSpecDevice(CUDA.CuVector(host.corr_pairs), host.combiner) 
 
 function Adapt.adapt_structure(to, data::MeasureSpecDevice)
     corr_pairs = Adapt.adapt_structure(to, data.corr_pairs)
-    #combiner = Adapt.adapt_structure(to, data.combiner)
-    MeasureSpecDevice(corr_pairs)#, combiner)
+    combiner = Adapt.adapt_structure(to, data.combiner)
+    MeasureSpecDevice(corr_pairs, combiner)
 end
 
 function Base.show(io::IO, ::MeasureSpec)

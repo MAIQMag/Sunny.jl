@@ -180,42 +180,42 @@ function _frequencies(H, evalues)
     return
 end
 
-function _intensities(swt, qs, L, Na, Nobs, Ncells, H, Avec_pref, Avec, corrbuf)
+function _intensities(swt, qs, L, Na, Nobs, Ncells, H, Avec_pref, Avec, corrbuf, recipvecs, intensity, kT, disp)
     iq = threadIdx().x + (blockIdx().x - 1) * blockDim().x
     if iq > size(H,3)
         return
     end
-    q = view(qs,:,iq)
+    q = Vec3(view(qs,:,iq))
     Hq = view(H,:,:,iq)
     Avecq = view(Avec,:,iq)
     corrbufq = view(corrbuf,:,iq)
     # Fill `intensity` array
     for band in 1:L
         for idx in eachindex(Avecq)
-            Avecq[idx] = 0
+            Avecq[idx] = 0.
         end
         data = swt.data
-        #t = reshape(view(Hq, :, band+L), Na, 2)
+        t = view(Hq, :, band+L)
         for i in 1:Na, μ in 1:Nobs
             O = data.observables_localized[μ, i]
             # This is the Avec of the two transverse and one
             # longitudinal directions in the local frame. (In the
             # local frame, z is longitudinal, and we are computing
             # the transverse part only, so the last entry is zero)
-            displacement_local_frame = SA[Hq[i + Na] + Hq[i], im * (Hq[i + Na] - Hq[i]), 0.0]
+            displacement_local_frame = SA[t[i + Na] + t[i], im * (t[i + Na] - t[i]), 0.0]
             Avecq[μ] += Avec_pref[μ, i, iq] * (data.sqrtS[i]/√2) * (O' * displacement_local_frame)[1]
         end
         measure = swt.measure
         for idx in eachindex(corrbufq)
-            #(μ, ν) = swt.measure.corr_pairs[idx]
-            #corrbufq[idx] = Avecq[μ] * conj(Avecq[ν]) / Ncells
+            (μ, ν) = swt.measure.corr_pairs[idx]
+            corrbufq[idx] = Avecq[μ] * conj(Avecq[ν]) / Ncells
         end
 
-#            q_global = cryst.recipvecs * q
-#            intensity[band, iq] = thermal_prefactor(disp[band, iq]; kT) * measure.combiner(q_global, corrbufq)
+        q_global = recipvecs * q
+        intensity[band, iq] = thermal_prefactor(disp[band, iq]; kT) * measure.combiner(q_global, corrbufq)
     end
     return
-end   
+end
 
 """
     intensities_bands(swt::SpinWaveTheory, qpts; kT=0)
@@ -293,13 +293,15 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     blocks = cld(Nq, threads)
     kernel(I_d, evalues_d; threads=threads, blocks=blocks)
 
-    evalues = Array(evalues_d)
+    #evalues = Array(evalues_d)
     H = Array(I_d)
-    disp = copy(view(evalues,L+1:2L, :))
+    disp_d = view(evalues_d,L+1:2L, :)
+    disp = Array(disp_d)
 
     # Preallocation
     Avec_pref = zeros(ComplexF64, Nobs, Na, Nq)
     intensity = zeros(eltype(measure), L, Nq)
+    intensity_d = CuArray(intensity)
     for (iq, q) in enumerate(qpts.qs)
         q_global = cryst.recipvecs * q
         for i in 1:Na, μ in 1:Nobs
@@ -321,46 +323,15 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     corrbuf_d = CUDA.zeros(ComplexF64, Ncorr, Nq)
     Avec_d = CUDA.zeros(ComplexF64, Nobs, Nq)
     Avec_pref_d = CuArray(Avec_pref)
-    kernel = @cuda launch=false _intensities(swt_d, qs_reshaped_d, L, Na, Nobs, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d)
+    kernel = @cuda launch=false _intensities(swt_d, qs_reshaped_d, L, Na, Nobs, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d, cryst.recipvecs, intensity_d, kT, disp_d)
     config = launch_configuration(kernel.fun)
     threads = Base.min(Nq, config.threads)
     blocks = cld(Nq, threads)
-    kernel(swt_d, qs_reshaped_d, L, Na, Nobs, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d; threads=threads, blocks=blocks)
+    
+    kernel(swt_d, qs_reshaped_d, L, Na, Nobs, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d, cryst.recipvecs, intensity_d, kT, disp_d; threads=threads, blocks=blocks)
 
-    corrbuf = zeros(ComplexF64, Ncorr, Nq)
-    Avec = zeros(ComplexF64, Nobs, Nq)
-    for (iq, q) in enumerate(qpts.qs)
-        Hq = view(H,:,:,iq)
-        Avecq = view(Avec,:,iq)
-        corrbufq = view(corrbuf,:,iq)
-        # Fill `intensity` array
-        for band in 1:L
-            fill!(Avecq, 0)
-            @assert sys.mode in (:dipole, :dipole_uncorrected)
-            data = swt.data::SWTDataDipole
-            t = reshape(view(Hq, :, band+L), Na, 2)
-            for i in 1:Na, μ in 1:Nobs
-                O = data.observables_localized[μ, i]
-                # This is the Avec of the two transverse and one
-                # longitudinal directions in the local frame. (In the
-                # local frame, z is longitudinal, and we are computing
-                # the transverse part only, so the last entry is zero)
-                displacement_local_frame = SA[t[i, 2] + t[i, 1], im * (t[i, 2] - t[i, 1]), 0.0]
-                Avecq[μ] += Avec_pref[μ, i, iq] * (data.sqrtS[i]/√2) * (O' * displacement_local_frame)[1]
-            end
-
-            for idx in eachindex(corrbufq)
-                (μ, ν) = measure.corr_pairs[idx]
-                corrbufq[idx] = Avecq[μ] * conj(Avecq[ν]) / Ncells
-            end
-
-            q_global = cryst.recipvecs * q
-            intensity[band, iq] = thermal_prefactor(disp[band, iq]; kT) * measure.combiner(q_global, corrbufq)
-        end
-    end
-
-    disp = reshape(disp, L, size(qpts.qs)...)
-    intensity = reshape(intensity, L, size(qpts.qs)...)
+    disp = reshape(Array(disp_d), L, size(qpts.qs)...)
+    intensity = reshape(Array(intensity_d), L, size(qpts.qs)...)
     return BandIntensities(cryst, qpts, disp, intensity)
 end
 
