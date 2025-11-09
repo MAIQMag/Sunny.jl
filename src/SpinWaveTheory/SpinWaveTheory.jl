@@ -72,19 +72,21 @@ struct SpinWaveTheory <: AbstractSpinWaveTheory
     regularization :: Float64
 end
 
-struct SpinWaveTheoryDevice{TSys, TData}
+struct SpinWaveTheoryDevice{TSys, TData, TMeasure}
     sys   :: TSys
     data  :: TData
+    measure        :: TMeasure
     regularization :: Float64
 end
 
-SpinWaveTheoryDevice(host::SpinWaveTheory) = SpinWaveTheoryDevice(SystemDevice(host.sys), SWTDataDipoleDevice(host.data), host.regularization)
+SpinWaveTheoryDevice(host::SpinWaveTheory) = SpinWaveTheoryDevice(SystemDevice(host.sys), SWTDataDipoleDevice(host.data), MeasureSpecDevice(host.measure), host.regularization)
 
 function Adapt.adapt_structure(to, swt::SpinWaveTheoryDevice)
     sys = Adapt.adapt_structure(to, swt.sys)
     data = Adapt.adapt_structure(to, swt.data)
+    measure = Adapt.adapt_structure(to, swt.measure)
     regularization = Adapt.adapt_structure(to, swt.regularization)
-    SpinWaveTheoryDevice(sys, data, regularization)
+    SpinWaveTheoryDevice(sys, data, measure, regularization)
 end
 
 function SpinWaveTheory(sys::System; measure::Union{Nothing, MeasureSpec}, regularization=1e-8, energy_ϵ=nothing)

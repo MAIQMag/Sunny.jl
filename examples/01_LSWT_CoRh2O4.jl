@@ -29,7 +29,7 @@ using Sunny, GLMakie
 # and uses these to provide physical constants. For example, `units.K` returns
 # one kelvin as 0.086 meV, where the Boltzmann constant is implicit.
 
-units = Units(:meV, :angstrom);
+units = Units(:meV, :angstrom)
 
 # ### Crystal cell
 #

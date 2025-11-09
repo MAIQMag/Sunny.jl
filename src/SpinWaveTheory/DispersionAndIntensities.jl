@@ -180,6 +180,43 @@ function _frequencies(H, evalues)
     return
 end
 
+function _intensities(swt, qs, L, Na, Nobs, Ncells, H, Avec_pref, Avec, corrbuf)
+    iq = threadIdx().x + (blockIdx().x - 1) * blockDim().x
+    if iq > size(H,3)
+        return
+    end
+    q = view(qs,:,iq)
+    Hq = view(H,:,:,iq)
+    Avecq = view(Avec,:,iq)
+    corrbufq = view(corrbuf,:,iq)
+    # Fill `intensity` array
+    for band in 1:L
+        for idx in eachindex(Avecq)
+            Avecq[idx] = 0
+        end
+        data = swt.data
+        #t = reshape(view(Hq, :, band+L), Na, 2)
+        for i in 1:Na, μ in 1:Nobs
+            O = data.observables_localized[μ, i]
+            # This is the Avec of the two transverse and one
+            # longitudinal directions in the local frame. (In the
+            # local frame, z is longitudinal, and we are computing
+            # the transverse part only, so the last entry is zero)
+            displacement_local_frame = SA[Hq[i + Na] + Hq[i], im * (Hq[i + Na] - Hq[i]), 0.0]
+            Avecq[μ] += Avec_pref[μ, i, iq] * (data.sqrtS[i]/√2) * (O' * displacement_local_frame)[1]
+        end
+        measure = swt.measure
+        for idx in eachindex(corrbufq)
+            #(μ, ν) = swt.measure.corr_pairs[idx]
+            #corrbufq[idx] = Avecq[μ] * conj(Avecq[ν]) / Ncells
+        end
+
+#            q_global = cryst.recipvecs * q
+#            intensity[band, iq] = thermal_prefactor(disp[band, iq]; kT) * measure.combiner(q_global, corrbufq)
+    end
+    return
+end   
+
 """
     intensities_bands(swt::SpinWaveTheory, qpts; kT=0)
 
@@ -272,6 +309,23 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
             Avec_pref[μ, i, iq] *= compute_form_factor(ff, norm2(q_global))
         end
     end
+
+    for (iq, q) in enumerate(qpts.qs)
+        view(qs_reshaped, :, iq) .= q
+    end
+    copyto!(qs_reshaped_d, qs_reshaped)
+
+    @assert sys.mode in (:dipole, :dipole_uncorrected)
+
+    swt_d = SpinWaveTheoryDevice(swt)
+    corrbuf_d = CUDA.zeros(ComplexF64, Ncorr, Nq)
+    Avec_d = CUDA.zeros(ComplexF64, Nobs, Nq)
+    Avec_pref_d = CuArray(Avec_pref)
+    kernel = @cuda launch=false _intensities(swt_d, qs_reshaped_d, L, Na, Nobs, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d)
+    config = launch_configuration(kernel.fun)
+    threads = Base.min(Nq, config.threads)
+    blocks = cld(Nq, threads)
+    kernel(swt_d, qs_reshaped_d, L, Na, Nobs, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d; threads=threads, blocks=blocks)
 
     corrbuf = zeros(ComplexF64, Ncorr, Nq)
     Avec = zeros(ComplexF64, Nobs, Nq)
