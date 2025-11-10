@@ -156,9 +156,9 @@ function dynamical_matrix!(H, swt::SpinWaveTheory, q_reshaped)
     end
 end
 
-function dynamical_matrix!(H::CUDA.CuArray{ComplexF64, 3}, swt::SpinWaveTheory, q_reshaped)
+function dynamical_matrix!(H::CUDA.CuArray{ComplexF64, 3}, swt::SpinWaveTheory, q_reshaped, qs)
     @assert swt.sys.mode in (:dipole, :dipole_uncorrected)
-    swt_hamiltonian_dipole!(H, swt, q_reshaped)
+    swt_hamiltonian_dipole!(H, swt, q_reshaped, qs)
 end
 
 function mul_dynamical_matrix(swt, x, qs_reshaped)

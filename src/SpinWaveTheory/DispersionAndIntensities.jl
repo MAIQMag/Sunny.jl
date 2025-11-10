@@ -258,14 +258,18 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     #    @assert T0 === Tq
     #end
 
-    qs_reshaped = zeros(Float64, 3, Nq)
+    qs_h = zeros(Float64, 3, Nq)
     for (iq, q) in enumerate(qpts.qs)
-        view(qs_reshaped, :, iq) .= to_reshaped_rlu(swt.sys, q)
+        view(qs_h, :, iq) .= q #to_reshaped_rlu(swt.sys, q)
     end
+    qs_d = CuArray(qs_h)
+
+    # Given q in reciprocal lattice units (RLU) for the original crystal, return a
+    # q_reshaped in RLU for the possibly-reshaped crystal.
+    reshaped_rlu = inv(2π) * sys.crystal.latvecs' * orig_crystal(sys).recipvecs
 
     H_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
-    qs_reshaped_d = CuArray(qs_reshaped)
-    dynamical_matrix!(H_d, swt, qs_reshaped_d)
+    dynamical_matrix!(H_d, swt, reshaped_rlu, qs_d)
 
     @time begin
         H_dp = [view(H_d,:,:,i) for i in 1:Nq]
@@ -300,8 +304,6 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
 
     # Preallocation
     Avec_pref = zeros(ComplexF64, Nobs, Na, Nq)
-    intensity = zeros(eltype(measure), L, Nq)
-    intensity_d = CuArray(intensity)
     for (iq, q) in enumerate(qpts.qs)
         q_global = cryst.recipvecs * q
         for i in 1:Na, μ in 1:Nobs
@@ -312,23 +314,19 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
         end
     end
 
-    for (iq, q) in enumerate(qpts.qs)
-        view(qs_reshaped, :, iq) .= q
-    end
-    copyto!(qs_reshaped_d, qs_reshaped)
-
     @assert sys.mode in (:dipole, :dipole_uncorrected)
 
+    intensity_d = CUDA.zeros(eltype(measure), L, Nq)
     swt_d = SpinWaveTheoryDevice(swt)
     corrbuf_d = CUDA.zeros(ComplexF64, Ncorr, Nq)
     Avec_d = CUDA.zeros(ComplexF64, Nobs, Nq)
     Avec_pref_d = CuArray(Avec_pref)
-    kernel = @cuda launch=false _intensities(swt_d, qs_reshaped_d, L, Na, Nobs, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d, cryst.recipvecs, intensity_d, kT, disp_d)
+    kernel = @cuda launch=false _intensities(swt_d, qs_d, L, Na, Nobs, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d, cryst.recipvecs, intensity_d, kT, disp_d)
     config = launch_configuration(kernel.fun)
     threads = Base.min(Nq, config.threads)
     blocks = cld(Nq, threads)
     
-    kernel(swt_d, qs_reshaped_d, L, Na, Nobs, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d, cryst.recipvecs, intensity_d, kT, disp_d; threads=threads, blocks=blocks)
+    kernel(swt_d, qs_d, L, Na, Nobs, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d, cryst.recipvecs, intensity_d, kT, disp_d; threads=threads, blocks=blocks)
 
     disp = reshape(Array(disp_d), L, size(qpts.qs)...)
     intensity = reshape(Array(intensity_d), L, size(qpts.qs)...)

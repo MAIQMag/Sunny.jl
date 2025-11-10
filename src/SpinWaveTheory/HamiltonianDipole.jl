@@ -163,7 +163,7 @@ function _dot(a, b)
     return a[1]*b[1] + a[2]*b[2] + a[3]*b[3]    
 end
 
-function fill_matrix(H, swt, qs_reshaped, L)
+function fill_matrix(H, swt, qs_reshaped, qs, L)
     iq = threadIdx().x + (blockIdx().x - 1) * blockDim().x
     if iq > size(H, 3)
         return
@@ -175,7 +175,7 @@ function fill_matrix(H, swt, qs_reshaped, L)
     H21 = @view Hq[L+1:2L, 1:L]
     H22 = @view Hq[L+1:2L, L+1:2L]
 
-    q_reshaped = @view qs_reshaped[:,iq]
+    q_reshaped = qs_reshaped * Vec3(view(qs,:,iq))
 
     (; sys, data) = swt
     (; local_rotations, stevens_coefs, sqrtS) = data
@@ -275,10 +275,10 @@ function fill_matrix(H, swt, qs_reshaped, L)
     return
 end
 
-function swt_hamiltonian_dipole!(H::CUDA.CuArray{ComplexF64, 3}, swt::SpinWaveTheory, qs_reshaped::CUDA.CuArray{Float64, 2})
+function swt_hamiltonian_dipole!(H::CUDA.CuArray{ComplexF64, 3}, swt::SpinWaveTheory, qs_reshaped, qs::CUDA.CuArray{Float64, 2})
     L = nbands(swt)
-    @assert size(qs_reshaped, 1) == 3
-    Nq = size(qs_reshaped, 2)
+    @assert size(qs, 1) == 3
+    Nq = size(qs, 2)
     @assert size(H, 3) == Nq
     @assert size(view(H,:,:,1)) == (2L, 2L)
 
@@ -286,11 +286,11 @@ function swt_hamiltonian_dipole!(H::CUDA.CuArray{ComplexF64, 3}, swt::SpinWaveTh
     @assert isnothing(swt.sys.ewald)
     swt_device = SpinWaveTheoryDevice(swt)
 
-    kernel = CUDA.@cuda launch=false fill_matrix(H, swt_device, qs_reshaped, L)
+    kernel = CUDA.@cuda launch=false fill_matrix(H, swt_device, qs_reshaped, qs, L)
     config = launch_configuration(kernel.fun)
     threads = Base.min(Nq, config.threads)
     blocks = cld(Nq, threads)
-    kernel(H, swt_device, qs_reshaped, L; threads=threads, blocks=blocks)
+    kernel(H, swt_device, qs_reshaped, qs, L; threads=threads, blocks=blocks)
 end
 
 function multiply_by_hamiltonian_dipole!(y::AbstractMatrix{ComplexF64}, x::AbstractMatrix{ComplexF64}, swt::SpinWaveTheory, qs_reshaped::Vector{Vec3};
