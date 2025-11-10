@@ -187,7 +187,7 @@ function _intensities(swt, qs, L, Ncells, H, Avec_pref, Avec, corrbuf, recipvecs
     end
     q = Vec3(view(qs,:,iq))
     Hq = view(H,:,:,iq)
-    Avecq = view(Avec,:,iq)
+    Avec_prefq = view(Avec_pref,:,:,iq)
     corrbufq = view(corrbuf,:,iq)
 
     (; sys, data, measure) = swt
@@ -198,10 +198,12 @@ function _intensities(swt, qs, L, Ncells, H, Avec_pref, Avec, corrbuf, recipvecs
     for i in 1:Na, μ in 1:Nobs
         r_global = global_position(sys, (1, 1, 1, i)) # + offsets[μ, i]
         ff = get_swt_formfactor(measure, μ, i)
-        Avec_pref[μ, i, iq] = exp(- im * dot(q_global, r_global))
-        Avec_pref[μ, i, iq] *= compute_form_factor(ff, norm2(q_global))
+        Avec_prefq[μ, i] = exp(- im * dot(q_global, r_global))
+        Avec_prefq[μ, i] *= compute_form_factor(ff, norm2(q_global))
     end
 
+    Avec = CuDynamicSharedArray(ComplexF64, (Nobs, blockDim().x))
+    Avecq = view(Avec, :, threadIdx().x)
     # Fill `intensity` array
     for band in 1:L
         for idx in eachindex(Avecq)
@@ -215,7 +217,7 @@ function _intensities(swt, qs, L, Ncells, H, Avec_pref, Avec, corrbuf, recipvecs
             # local frame, z is longitudinal, and we are computing
             # the transverse part only, so the last entry is zero)
             displacement_local_frame = SA[t[i + Na] + t[i], im * (t[i + Na] - t[i]), 0.0]
-            Avecq[μ] += Avec_pref[μ, i, iq] * (data.sqrtS[i]/√2) * (O' * displacement_local_frame)[1]
+            Avecq[μ] += Avec_prefq[μ, i] * (data.sqrtS[i]/√2) * (O' * displacement_local_frame)[1]
         end
         for idx in eachindex(corrbufq)
             (μ, ν) = measure.corr_pairs[idx]
@@ -268,25 +270,21 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     H_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
     dynamical_matrix!(H_d, swt, reshaped_rlu, qs_d)
 
-    @time begin
-        H_dp = [view(H_d,:,:,i) for i in 1:Nq]
-        CUSOLVER.potrfBatched!('L', H_dp)
+    H_dp = [view(H_d,:,:,i) for i in 1:Nq]
+    CUSOLVER.potrfBatched!('L', H_dp)
 
-        I_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
-        kernel = @cuda launch=false _set_identity(I_d)
-        config = launch_configuration(kernel.fun)
-        threads = Base.min(Nq, config.threads)
-        blocks = cld(Nq, threads)
-        kernel(I_d; threads=threads, blocks=blocks)
+    I_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
+    kernel = @cuda launch=false _set_identity(I_d)
+    config = launch_configuration(kernel.fun)
+    threads = Base.min(Nq, config.threads)
+    blocks = cld(Nq, threads)
+    kernel(I_d; threads=threads, blocks=blocks)
 
-        I_dp = [view(I_d,:,:,i) for i in 1:Nq]
-        CUBLAS.trsm_batched!('R', 'L', 'C', 'N', ComplexF64(1.), H_dp, I_dp)
-        CUBLAS.trsm_batched!('L', 'L', 'N', 'N', ComplexF64(1.), H_dp, I_dp)
-
-        evalues_d , _ = CUSOLVER.heevjBatched!('V', 'L', I_d)
-
-        CUBLAS.trsm_batched!('L', 'L', 'C', 'N', ComplexF64(1.), H_dp, I_dp)
-    end
+    I_dp = [view(I_d,:,:,i) for i in 1:Nq]
+    CUBLAS.trsm_batched!('R', 'L', 'C', 'N', ComplexF64(1.), H_dp, I_dp)
+    CUBLAS.trsm_batched!('L', 'L', 'N', 'N', ComplexF64(1.), H_dp, I_dp)
+    evalues_d , _ = CUSOLVER.heevjBatched!('V', 'L', I_d)
+    CUBLAS.trsm_batched!('L', 'L', 'C', 'N', ComplexF64(1.), H_dp, I_dp)
 
     kernel = @cuda launch=false _frequencies(I_d, evalues_d)
     config = launch_configuration(kernel.fun)
@@ -298,11 +296,6 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     # Preallocation
     swt_d = SpinWaveTheoryDevice(swt)
     Avec_pref_d = CUDA.zeros(ComplexF64, Nobs, Na, Nq)
-    #kernel = @cuda launch=false _avec_pref(swt_d, Avec_pref_d, qs_d, cryst.recipvecs)
-    #config = launch_configuration(kernel.fun)
-    #threads = Base.min(Nq, config.threads)
-    #blocks = cld(Nq, threads)
-    #kernel(swt_d, Avec_pref_d, qs_d, cryst.recipvecs; threads=threads, blocks=blocks)
 
     @assert sys.mode in (:dipole, :dipole_uncorrected)
 
@@ -310,10 +303,11 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     corrbuf_d = CUDA.zeros(ComplexF64, Ncorr, Nq)
     Avec_d = CUDA.zeros(ComplexF64, Nobs, Nq)
     kernel = @cuda launch=false _intensities(swt_d, qs_d, L, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d, cryst.recipvecs, intensity_d, kT, disp_d)
-    config = launch_configuration(kernel.fun)
+    get_shmem(threads; Nobs=Nobs) = threads * Nobs * sizeof(ComplexF64)
+    config = launch_configuration(kernel.fun, shmem=threads->get_shmem(threads))
     threads = Base.min(Nq, config.threads)
     blocks = cld(Nq, threads)
-    kernel(swt_d, qs_d, L, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d, cryst.recipvecs, intensity_d, kT, disp_d; threads=threads, blocks=blocks)
+    kernel(swt_d, qs_d, L, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d, cryst.recipvecs, intensity_d, kT, disp_d; threads=threads, blocks=blocks, shmem=get_shmem(threads))
 
     disp_d = reshape(CuArray(disp_d), L, size(qpts.qs)...)
     intensity_d = reshape(intensity_d, L, size(qpts.qs)...)
