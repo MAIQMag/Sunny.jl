@@ -327,9 +327,9 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     blocks = cld(Nq, threads)
     kernel(swt_d, qs_d, L, Na, Nobs, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d, cryst.recipvecs, intensity_d, kT, disp_d; threads=threads, blocks=blocks)
 
-    disp = reshape(Array(disp_d), L, size(qpts.qs)...)
-    intensity = reshape(Array(intensity_d), L, size(qpts.qs)...)
-    return BandIntensities(cryst, qpts, disp, intensity)
+    disp_d = reshape(CuArray(disp_d), L, size(qpts.qs)...)
+    intensity_d = reshape(intensity_d, L, size(qpts.qs)...)
+    return BandIntensitiesDevice(cryst, qpts, disp_d, intensity_d)
 end
 
 """

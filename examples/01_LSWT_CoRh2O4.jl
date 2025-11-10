@@ -152,7 +152,8 @@ path = q_space_path(cryst, qs, 500)
 # result.
 
 energies = range(0, 6, 300)
-res = intensities(swt, path; energies, kernel)
+res_d = intensities(swt, path; energies, kernel)
+res = Sunny.Intensities(res_d)
 plot_intensities(res; units, title="CoRh₂O₄ LSWT")
 
 # Sometimes experimental data is only available as a powder average, i.e., as an
