@@ -165,7 +165,6 @@ function broaden!(data::CuArray{Ret}, bands::BandIntensitiesDevice{Ret}; energie
     #cutoff = 1e-12 * Statistics.quantile(asdf, 0.95)
 
     kernel_d = BroadeningDevice(kernel)
-    println(typeof(kernel_d))
     gpu_kernel = CUDA.@cuda launch=false _broaden(data, bands.data, bands.disp, energies_d, kernel_d)
     config = launch_configuration(gpu_kernel.fun)
     threads = Base.min(nq, config.threads)

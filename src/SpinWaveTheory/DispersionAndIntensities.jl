@@ -302,10 +302,7 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     threads = Base.min(Nq, config.threads)
     blocks = cld(Nq, threads)
     kernel(I_d, evalues_d; threads=threads, blocks=blocks)
-
-    H = Array(I_d)
     disp_d = view(evalues_d,L+1:2L, :)
-    disp = Array(disp_d)
 
     # Preallocation
     swt_d = SpinWaveTheoryDevice(swt)
