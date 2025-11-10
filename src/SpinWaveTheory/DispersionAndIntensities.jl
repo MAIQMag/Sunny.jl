@@ -180,7 +180,7 @@ function _frequencies(H, evalues)
     return
 end
 
-function _intensities(swt, qs, L, Na, Nobs, Ncells, H, Avec_pref, Avec, corrbuf, recipvecs, intensity, kT, disp)
+function _intensities(swt, qs, L, Ncells, H, Avec_pref, Avec, corrbuf, recipvecs, intensity, kT, disp)
     iq = threadIdx().x + (blockIdx().x - 1) * blockDim().x
     if iq > size(H,3)
         return
@@ -189,12 +189,24 @@ function _intensities(swt, qs, L, Na, Nobs, Ncells, H, Avec_pref, Avec, corrbuf,
     Hq = view(H,:,:,iq)
     Avecq = view(Avec,:,iq)
     corrbufq = view(corrbuf,:,iq)
+
+    (; sys, data, measure) = swt
+    Nobs = size(Avec_pref, 1)
+    Na = size(Avec_pref,2)
+    q = Vec3(view(qs,:,iq))
+    q_global = recipvecs * q
+    for i in 1:Na, μ in 1:Nobs
+        r_global = global_position(sys, (1, 1, 1, i)) # + offsets[μ, i]
+        ff = get_swt_formfactor(measure, μ, i)
+        Avec_pref[μ, i, iq] = exp(- im * dot(q_global, r_global))
+        Avec_pref[μ, i, iq] *= compute_form_factor(ff, norm2(q_global))
+    end
+
     # Fill `intensity` array
     for band in 1:L
         for idx in eachindex(Avecq)
             Avecq[idx] = 0.
         end
-        data = swt.data
         t = view(Hq, :, band+L)
         for i in 1:Na, μ in 1:Nobs
             O = data.observables_localized[μ, i]
@@ -205,33 +217,12 @@ function _intensities(swt, qs, L, Na, Nobs, Ncells, H, Avec_pref, Avec, corrbuf,
             displacement_local_frame = SA[t[i + Na] + t[i], im * (t[i + Na] - t[i]), 0.0]
             Avecq[μ] += Avec_pref[μ, i, iq] * (data.sqrtS[i]/√2) * (O' * displacement_local_frame)[1]
         end
-        measure = swt.measure
         for idx in eachindex(corrbufq)
-            (μ, ν) = swt.measure.corr_pairs[idx]
+            (μ, ν) = measure.corr_pairs[idx]
             corrbufq[idx] = Avecq[μ] * conj(Avecq[ν]) / Ncells
         end
 
-        q_global = recipvecs * q
         intensity[band, iq] = thermal_prefactor(disp[band, iq]; kT) * measure.combiner(q_global, corrbufq)
-    end
-    return
-end
-
-function _avec_pref(swt, Avec_pref, qs, recipvecs)
-    iq = threadIdx().x + (blockIdx().x - 1) * blockDim().x
-    if iq > size(Avec_pref,3)
-        return
-    end
-    (; sys, measure) = swt
-    Nobs = size(Avec_pref, 1)
-    Na = size(Avec_pref,2)
-    q = Vec3(view(qs,:,iq))
-    q_global = recipvecs * q
-    for i in 1:Na, μ in 1:Nobs
-        r_global = global_position(sys, (1, 1, 1, i)) # + offsets[μ, i]
-        ff = get_swt_formfactor(measure, μ, i)
-        Avec_pref[μ, i, iq] = exp(- im * dot(q_global, r_global))
-        Avec_pref[μ, i, iq] *= compute_form_factor(ff, norm2(q_global))
     end
     return
 end
@@ -307,22 +298,22 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     # Preallocation
     swt_d = SpinWaveTheoryDevice(swt)
     Avec_pref_d = CUDA.zeros(ComplexF64, Nobs, Na, Nq)
-    kernel = @cuda launch=false _avec_pref(swt_d, Avec_pref_d, qs_d, cryst.recipvecs)
-    config = launch_configuration(kernel.fun)
-    threads = Base.min(Nq, config.threads)
-    blocks = cld(Nq, threads)
-    kernel(swt_d, Avec_pref_d, qs_d, cryst.recipvecs; threads=threads, blocks=blocks)
+    #kernel = @cuda launch=false _avec_pref(swt_d, Avec_pref_d, qs_d, cryst.recipvecs)
+    #config = launch_configuration(kernel.fun)
+    #threads = Base.min(Nq, config.threads)
+    #blocks = cld(Nq, threads)
+    #kernel(swt_d, Avec_pref_d, qs_d, cryst.recipvecs; threads=threads, blocks=blocks)
 
     @assert sys.mode in (:dipole, :dipole_uncorrected)
 
     intensity_d = CUDA.zeros(eltype(measure), L, Nq)
     corrbuf_d = CUDA.zeros(ComplexF64, Ncorr, Nq)
     Avec_d = CUDA.zeros(ComplexF64, Nobs, Nq)
-    kernel = @cuda launch=false _intensities(swt_d, qs_d, L, Na, Nobs, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d, cryst.recipvecs, intensity_d, kT, disp_d)
+    kernel = @cuda launch=false _intensities(swt_d, qs_d, L, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d, cryst.recipvecs, intensity_d, kT, disp_d)
     config = launch_configuration(kernel.fun)
     threads = Base.min(Nq, config.threads)
     blocks = cld(Nq, threads)
-    kernel(swt_d, qs_d, L, Na, Nobs, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d, cryst.recipvecs, intensity_d, kT, disp_d; threads=threads, blocks=blocks)
+    kernel(swt_d, qs_d, L, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d, cryst.recipvecs, intensity_d, kT, disp_d; threads=threads, blocks=blocks)
 
     disp_d = reshape(CuArray(disp_d), L, size(qpts.qs)...)
     intensity_d = reshape(intensity_d, L, size(qpts.qs)...)
