@@ -180,16 +180,17 @@ function _frequencies(H, evalues)
     return
 end
 
-function _intensities(swt, qs, L, Ncells, H, Nobs, Na, corrbuf, recipvecs, intensity, kT, disp)
+function _intensities(swt, qs, L, Ncells, H, Nobs, Na, Ncorr, recipvecs, intensity, kT, disp)
     iq = threadIdx().x + (blockIdx().x - 1) * blockDim().x
     if iq > size(H,3)
         return
     end
     q = Vec3(view(qs,:,iq))
     Hq = view(H,:,:,iq)
-    Avec_pref = CuDynamicSharedArray(ComplexF64, (Nobs, Na, blockDim().x), Nobs * blockDim().x * sizeof(ComplexF64))
+    corrbuf = CuDynamicSharedArray(ComplexF64, (Ncorr, blockDim().x))
+    corrbufq = view(corrbuf,:,threadIdx().x)
+    Avec_pref = CuDynamicSharedArray(ComplexF64, (Nobs, Na, blockDim().x), (Ncorr + Nobs) * blockDim().x * sizeof(ComplexF64))
     Avec_prefq = view(Avec_pref,:,:,threadIdx().x)
-    corrbufq = view(corrbuf,:,iq)
 
     (; sys, data, measure) = swt
     q = Vec3(view(qs,:,iq))
@@ -201,7 +202,7 @@ function _intensities(swt, qs, L, Ncells, H, Nobs, Na, corrbuf, recipvecs, inten
         Avec_prefq[μ, i] *= compute_form_factor(ff, norm2(q_global))
     end
 
-    Avec = CuDynamicSharedArray(ComplexF64, (Nobs, blockDim().x))
+    Avec = CuDynamicSharedArray(ComplexF64, (Nobs, blockDim().x), Ncorr * blockDim().x * sizeof(ComplexF64))
     Avecq = view(Avec, :, threadIdx().x)
     # Fill `intensity` array
     for band in 1:L
@@ -298,13 +299,12 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     @assert sys.mode in (:dipole, :dipole_uncorrected)
 
     intensity_d = CUDA.zeros(eltype(measure), L, Nq)
-    corrbuf_d = CUDA.zeros(ComplexF64, Ncorr, Nq)
-    kernel = @cuda launch=false _intensities(swt_d, qs_d, L, Ncells, I_d, Nobs, Na, corrbuf_d, cryst.recipvecs, intensity_d, kT, disp_d)
-    get_shmem(threads; Nobs=Nobs,Na=Na) = threads * (Nobs * (1 + Na)) * sizeof(ComplexF64)
+    kernel = @cuda launch=false _intensities(swt_d, qs_d, L, Ncells, I_d, Nobs, Na, Ncorr, cryst.recipvecs, intensity_d, kT, disp_d)
+    get_shmem(threads; Nobs=Nobs, Na=Na, Ncorr=Ncorr) = threads * sizeof(ComplexF64) * (Nobs * (1 + Na) + Ncorr)
     config = launch_configuration(kernel.fun, shmem=threads->get_shmem(threads))
     threads = Base.min(Nq, config.threads)
     blocks = cld(Nq, threads)
-    kernel(swt_d, qs_d, L, Ncells, I_d, Nobs, Na, corrbuf_d, cryst.recipvecs, intensity_d, kT, disp_d; threads=threads, blocks=blocks, shmem=get_shmem(threads))
+    kernel(swt_d, qs_d, L, Ncells, I_d, Nobs, Na, Ncorr, cryst.recipvecs, intensity_d, kT, disp_d; threads=threads, blocks=blocks, shmem=get_shmem(threads))
 
     disp_d = reshape(CuArray(disp_d), L, size(qpts.qs)...)
     intensity_d = reshape(intensity_d, L, size(qpts.qs)...)
