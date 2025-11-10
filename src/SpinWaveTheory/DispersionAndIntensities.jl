@@ -217,6 +217,25 @@ function _intensities(swt, qs, L, Na, Nobs, Ncells, H, Avec_pref, Avec, corrbuf,
     return
 end
 
+function _avec_pref(swt, Avec_pref, qs, recipvecs)
+    iq = threadIdx().x + (blockIdx().x - 1) * blockDim().x
+    if iq > size(Avec_pref,3)
+        return
+    end
+    (; sys, measure) = swt
+    Nobs = size(Avec_pref, 1)
+    Na = size(Avec_pref,2)
+    q = Vec3(view(qs,:,iq))
+    q_global = recipvecs * q
+    for i in 1:Na, μ in 1:Nobs
+        r_global = global_position(sys, (1, 1, 1, i)) # + offsets[μ, i]
+        ff = get_swt_formfactor(measure, μ, i)
+        Avec_pref[μ, i, iq] = exp(- im * dot(q_global, r_global))
+        Avec_pref[μ, i, iq] *= compute_form_factor(ff, norm2(q_global))
+    end
+    return
+end
+
 """
     intensities_bands(swt::SpinWaveTheory, qpts; kT=0)
 
@@ -246,18 +265,6 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     Nobs = num_observables(measure)
     Ncorr = num_correlations(measure)
 
-
-    #for (iq, q) in enumerate(qpts.qs)
-    #    Hq = view(H,:,:,iq)
-    #    Tq = view(T,:,:,iq)
-    #    # Solve generalized eigenvalue problem, Ĩ t = λ H t, for columns t of T.
-    #    tmp, T0 = eigen!(Hermitian(Tq), Hermitian(Hq))
-    #    view(evalues,:,iq) .= tmp
-
-    #    # Note that T0 and T refer to the same data.
-    #    @assert T0 === Tq
-    #end
-
     qs_h = zeros(Float64, 3, Nq)
     for (iq, q) in enumerate(qpts.qs)
         view(qs_h, :, iq) .= q #to_reshaped_rlu(swt.sys, q)
@@ -267,7 +274,6 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     # Given q in reciprocal lattice units (RLU) for the original crystal, return a
     # q_reshaped in RLU for the possibly-reshaped crystal.
     reshaped_rlu = inv(2π) * sys.crystal.latvecs' * orig_crystal(sys).recipvecs
-
     H_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
     dynamical_matrix!(H_d, swt, reshaped_rlu, qs_d)
 
@@ -297,35 +303,28 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     blocks = cld(Nq, threads)
     kernel(I_d, evalues_d; threads=threads, blocks=blocks)
 
-    #evalues = Array(evalues_d)
     H = Array(I_d)
     disp_d = view(evalues_d,L+1:2L, :)
     disp = Array(disp_d)
 
     # Preallocation
-    Avec_pref = zeros(ComplexF64, Nobs, Na, Nq)
-    for (iq, q) in enumerate(qpts.qs)
-        q_global = cryst.recipvecs * q
-        for i in 1:Na, μ in 1:Nobs
-            r_global = global_position(sys, (1, 1, 1, i)) # + offsets[μ, i]
-            ff = get_swt_formfactor(measure, μ, i)
-            Avec_pref[μ, i, iq] = exp(- im * dot(q_global, r_global))
-            Avec_pref[μ, i, iq] *= compute_form_factor(ff, norm2(q_global))
-        end
-    end
+    swt_d = SpinWaveTheoryDevice(swt)
+    Avec_pref_d = CUDA.zeros(ComplexF64, Nobs, Na, Nq)
+    kernel = @cuda launch=false _avec_pref(swt_d, Avec_pref_d, qs_d, cryst.recipvecs)
+    config = launch_configuration(kernel.fun)
+    threads = Base.min(Nq, config.threads)
+    blocks = cld(Nq, threads)
+    kernel(swt_d, Avec_pref_d, qs_d, cryst.recipvecs; threads=threads, blocks=blocks)
 
     @assert sys.mode in (:dipole, :dipole_uncorrected)
 
     intensity_d = CUDA.zeros(eltype(measure), L, Nq)
-    swt_d = SpinWaveTheoryDevice(swt)
     corrbuf_d = CUDA.zeros(ComplexF64, Ncorr, Nq)
     Avec_d = CUDA.zeros(ComplexF64, Nobs, Nq)
-    Avec_pref_d = CuArray(Avec_pref)
     kernel = @cuda launch=false _intensities(swt_d, qs_d, L, Na, Nobs, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d, cryst.recipvecs, intensity_d, kT, disp_d)
     config = launch_configuration(kernel.fun)
     threads = Base.min(Nq, config.threads)
     blocks = cld(Nq, threads)
-    
     kernel(swt_d, qs_d, L, Na, Nobs, Ncells, I_d, Avec_pref_d, Avec_d, corrbuf_d, cryst.recipvecs, intensity_d, kT, disp_d; threads=threads, blocks=blocks)
 
     disp = reshape(Array(disp_d), L, size(qpts.qs)...)

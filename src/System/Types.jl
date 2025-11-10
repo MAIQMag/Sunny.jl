@@ -146,19 +146,21 @@ mutable struct System{N}
     const rng              :: Random.Xoshiro
 end
 
-struct SystemDevice{TArrField, TArrInt, TArrGs}
+struct SystemDevice{TCrystal, TArrField, TArrInt, TArrGs}
+    crystal            :: TCrystal
     extfield           :: TArrField # External B field
     interactions_union :: TArrInt # Interactions
     gs                 :: TArrGs # g-tensor per atom in unit cell
     #ewald              :: Union{EwaldDevice, Nothing}
 end
 
-SystemDevice(host::System) = SystemDevice(CUDA.CuArray(host.extfield), CUDA.CuArray(map(op -> InteractionsDevice(op), host.interactions_union)), CUDA.CuArray(host.gs))
+SystemDevice(host::System) = SystemDevice(CrystalDevice(host.crystal), CUDA.CuArray(host.extfield), CUDA.CuArray(map(op -> InteractionsDevice(op), host.interactions_union)), CUDA.CuArray(host.gs))
 
 function Adapt.adapt_structure(to, sys::SystemDevice)
+    crystal = Adapt.adapt_structure(to, sys.crystal)
     extfield = Adapt.adapt_structure(to, sys.extfield)
     interactions_union = Adapt.adapt_structure(to, sys.interactions_union)
     gs = Adapt.adapt_structure(to, sys.gs)
     #ewald = Adapt.adapt_structure(to, sys.ewald)
-    SystemDevice(extfield, interactions_union, gs)
+    SystemDevice(crystal, extfield, interactions_union, gs)
 end
