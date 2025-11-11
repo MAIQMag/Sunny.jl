@@ -178,6 +178,8 @@ Number of atoms in the unit cell, i.e., number of Bravais sublattices.
 """
 @inline natoms(cryst::Crystal) = length(cryst.positions)
 
+@inline natoms(cryst::CrystalDevice) = length(cryst.positions)
+
 """
     cell_volume(cryst::Crystal)
 

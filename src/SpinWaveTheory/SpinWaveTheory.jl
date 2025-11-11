@@ -124,11 +124,19 @@ function nflavors(swt::SpinWaveTheory)
     nflavors = sys.mode == :SUN ? sys.Ns[1]-1 : 1
 end
 
+function nflavors(swt::SpinWaveTheoryDevice)
+    nflavors = 1
+end
+
 function nbands(swt::SpinWaveTheory)
     (; sys) = swt
     return nflavors(swt) * natoms(sys.crystal)
 end
 
+function nbands(swt::SpinWaveTheoryDevice)
+    (; sys) = swt
+    return nflavors(swt) * natoms(sys.crystal)
+end
 
 function to_standard_rlu(sys::System, q_reshaped)
     return orig_crystal(sys).recipvecs \ (sys.crystal.recipvecs * q_reshaped)
@@ -156,8 +164,8 @@ function dynamical_matrix!(H, swt::SpinWaveTheory, q_reshaped)
     end
 end
 
-function dynamical_matrix!(H::CUDA.CuArray{ComplexF64, 3}, swt::SpinWaveTheory, q_reshaped, qs)
-    @assert swt.sys.mode in (:dipole, :dipole_uncorrected)
+function dynamical_matrix!(H::CUDA.CuArray{ComplexF64, 3}, swt::SpinWaveTheoryDevice, q_reshaped, qs)
+    #@assert swt.sys.mode in (:dipole, :dipole_uncorrected)
     swt_hamiltonian_dipole!(H, swt, q_reshaped, qs)
 end
 

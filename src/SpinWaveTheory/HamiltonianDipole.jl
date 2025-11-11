@@ -275,7 +275,7 @@ function fill_matrix(H, swt, qs_reshaped, qs, L)
     return
 end
 
-function swt_hamiltonian_dipole!(H::CUDA.CuArray{ComplexF64, 3}, swt::SpinWaveTheory, qs_reshaped, qs::CUDA.CuArray{Float64, 2})
+function swt_hamiltonian_dipole!(H::CUDA.CuArray{ComplexF64, 3}, swt::SpinWaveTheoryDevice, qs_reshaped, qs::CUDA.CuArray{Float64, 2})
     L = nbands(swt)
     @assert size(qs, 1) == 3
     Nq = size(qs, 2)
@@ -283,14 +283,12 @@ function swt_hamiltonian_dipole!(H::CUDA.CuArray{ComplexF64, 3}, swt::SpinWaveTh
     @assert size(view(H,:,:,1)) == (2L, 2L)
 
     H .= 0.0
-    @assert isnothing(swt.sys.ewald)
-    swt_device = SpinWaveTheoryDevice(swt)
 
-    kernel = CUDA.@cuda launch=false fill_matrix(H, swt_device, qs_reshaped, qs, L)
+    kernel = CUDA.@cuda launch=false fill_matrix(H, swt, qs_reshaped, qs, L)
     config = launch_configuration(kernel.fun)
     threads = Base.min(Nq, config.threads)
     blocks = cld(Nq, threads)
-    kernel(H, swt_device, qs_reshaped, qs, L; threads=threads, blocks=blocks)
+    kernel(H, swt, qs_reshaped, qs, L; threads=threads, blocks=blocks)
 end
 
 function multiply_by_hamiltonian_dipole!(y::AbstractMatrix{ComplexF64}, x::AbstractMatrix{ComplexF64}, swt::SpinWaveTheory, qs_reshaped::Vector{Vec3};

@@ -240,6 +240,8 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     (; sys, measure) = swt
     isempty(measure.observables) && error("No observables! Construct SpinWaveTheory with a `measure` argument.")
     with_negative && error("Option `with_negative=true` not yet supported.")
+    @assert sys.mode in (:dipole, :dipole_uncorrected)
+    @assert isnothing(sys.ewald)
 
     qpts = convert(AbstractQPoints, qpts)
     cryst = orig_crystal(sys)
@@ -268,7 +270,8 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     # q_reshaped in RLU for the possibly-reshaped crystal.
     reshaped_rlu = inv(2π) * sys.crystal.latvecs' * orig_crystal(sys).recipvecs
     H_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
-    dynamical_matrix!(H_d, swt, reshaped_rlu, qs_d)
+    swt_d = SpinWaveTheoryDevice(swt)
+    dynamical_matrix!(H_d, swt_d, reshaped_rlu, qs_d)
 
     H_dp = [view(H_d,:,:,i) for i in 1:Nq]
     CUSOLVER.potrfBatched!('L', H_dp)
@@ -292,11 +295,6 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     blocks = cld(Nq, threads)
     kernel(I_d, evalues_d; threads=threads, blocks=blocks)
     disp_d = view(evalues_d,L+1:2L, :)
-
-    # Preallocation
-    swt_d = SpinWaveTheoryDevice(swt)
-
-    @assert sys.mode in (:dipole, :dipole_uncorrected)
 
     intensity_d = CUDA.zeros(eltype(measure), L, Nq)
     kernel = @cuda launch=false _intensities(swt_d, qs_d, L, Ncells, I_d, Nobs, Na, Ncorr, cryst.recipvecs, intensity_d, kT, disp_d)
