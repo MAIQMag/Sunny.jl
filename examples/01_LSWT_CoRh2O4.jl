@@ -152,7 +152,8 @@ path = q_space_path(cryst, qs, 500)
 # result.
 
 energies = range(0, 6, 300)
-res_d = intensities(swt, path; energies, kernel)
+@time res_d = intensities(swt, path; energies, kernel)
+@time res_d = intensities(swt, path; energies, kernel)
 res = Sunny.Intensities(res_d)
 plot_intensities(res; units, title="CoRh₂O₄ LSWT")
 
@@ -164,11 +165,11 @@ plot_intensities(res; units, title="CoRh₂O₄ LSWT")
 # calculation completes in about two seconds. Had we used the conventional cubic
 # cell, the calculation would be an order of magnitude slower.
 
-radii = range(0, 3, 200) # (1/Å)
-res = powder_average(cryst, radii, 2000) do qs
-    intensities(swt, qs; energies, kernel)
-end
-plot_intensities(res; units, saturation=1.0, title="CoRh₂O₄ Powder Average")
+#radii = range(0, 3, 200) # (1/Å)
+#res = powder_average(cryst, radii, 2000) do qs
+#    intensities(swt, qs; energies, kernel)
+#end
+#plot_intensities(res; units, saturation=1.0, title="CoRh₂O₄ Powder Average")
 
 # This result can be compared to experimental neutron scattering data
 # from Fig. 5 of [Ge et al.](https://doi.org/10.1103/PhysRevB.96.064413)

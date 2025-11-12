@@ -179,7 +179,7 @@ function fill_matrix(H, swt, qs_reshaped, qs, L)
 
     (; sys, data) = swt
     (; local_rotations, stevens_coefs, sqrtS) = data
-    (; extfield, gs) = sys
+    (; extfield, pairs, gs) = sys
 
     for (i, int) in enumerate(sys.interactions_union)
         # Zeeman term
@@ -197,9 +197,10 @@ function fill_matrix(H, swt, qs_reshaped, qs, L)
         H22[i, i] += A1
         H12[i, i] += A2
         H21[i, i] += conj(A2)
-
+        
         # Pair interactions
-        for coupling in int.pair
+        for idx in int.pair[1]:int.pair[2]
+            coupling = pairs[idx]
             (; isculled, bond) = coupling
             isculled && break
             @assert i == bond.i

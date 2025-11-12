@@ -60,6 +60,24 @@ struct PairCoupling
     end
 end
 
+# Pair couplings are counted only once per bond
+struct PairCouplingDevice{C, D}
+    isculled :: Bool
+    bond     :: Bond
+    bilin    :: C # Bilinear
+    biquad   :: D # Biquadratic
+end
+
+PairCouplingDevice(host::PairCoupling) = PairCouplingDevice(host.isculled, host.bond, host.bilin, host.biquad)
+
+function Adapt.adapt_structure(to, sys::PairCouplingDevice)
+    isculled = Adapt.adapt_structure(to, sys.isculled)
+    bond = Adapt.adapt_structure(to, sys.bond)
+    bilin = Adapt.adapt_structure(to, sys.bilin)
+    biquad = Adapt.adapt_structure(to, sys.biquad)
+    PairCouplingDevice(isculled, bond, bilin, biquad)
+end
+
 mutable struct Interactions
     # Onsite coupling is either an N×N Hermitian matrix or possibly renormalized
     # Stevens coefficients, depending on the mode :SUN or :dipole.
@@ -68,12 +86,12 @@ mutable struct Interactions
     pair :: Vector{PairCoupling}
 end
 
-struct InteractionsDevice{TPair}
-    onsite  :: StevensExpansion
+struct InteractionsDevice{TSExpansion, TPair}
+    onsite  :: TSExpansion
     pair    :: TPair
 end
 
-InteractionsDevice(host::Interactions) = InteractionsDevice(host.onsite, CUDA.cudaconvert(CUDA.CuVector(host.pair)))
+InteractionsDevice(host::Interactions, pair_idx) = InteractionsDevice(host.onsite, pair_idx)
 
 function Adapt.adapt_structure(to, inter::InteractionsDevice)
     onsite = Adapt.adapt_structure(to, inter.onsite)
@@ -146,21 +164,49 @@ mutable struct System{N}
     const rng              :: Random.Xoshiro
 end
 
-struct SystemDevice{TCrystal, TArrField, TArrInt, TArrGs}
+struct SystemDevice{TCrystal, TArrField, TArrInt, TPairs, TArrGs}
     crystal            :: TCrystal
     extfield           :: TArrField # External B field
     interactions_union :: TArrInt # Interactions
+    pairs              :: TPairs
     gs                 :: TArrGs # g-tensor per atom in unit cell
     #ewald              :: Union{EwaldDevice, Nothing}
 end
 
-SystemDevice(host::System) = SystemDevice(CrystalDevice(host.crystal), CUDA.CuArray(host.extfield), CUDA.CuArray(map(op -> InteractionsDevice(op), host.interactions_union)), CUDA.CuArray(host.gs))
+function SystemDevice(host::System)
+    crystal = CrystalDevice(host.crystal)
+    extfield = CUDA.CuArray(host.extfield)
+    gs = CUDA.CuArray(host.gs)
+    pairs_h = PairCouplingDevice{SMatrix{3, 3, Float64, 9}, Float64}[]
+    interactions_h = InteractionsDevice{StevensExpansion, Pair{Int64, Int64}}[]
+
+    indexes = Pair{Int,Int}[]
+    for int in host.interactions_union
+        first = length(pairs_h) + 1
+        last = length(pairs_h) + length(int.pair)
+        push!(indexes, Pair(first,last))
+        for pair in int.pair
+            push!(pairs_h, PairCouplingDevice(pair))
+        end
+    end
+    pairs_d = CuVector(pairs_h)
+    for (i, int) in enumerate(host.interactions_union)
+        println(indexes[i][1],' ', indexes[i][2])
+        a = InteractionsDevice(int, indexes[i])
+        println(typeof(a))
+        push!(interactions_h, a)
+    end
+    interactions_d = CuVector(interactions_h)
+
+    return SystemDevice(crystal, extfield, interactions_d, pairs_d, gs)
+end
 
 function Adapt.adapt_structure(to, sys::SystemDevice)
     crystal = Adapt.adapt_structure(to, sys.crystal)
     extfield = Adapt.adapt_structure(to, sys.extfield)
     interactions_union = Adapt.adapt_structure(to, sys.interactions_union)
+    pairs = Adapt.adapt_structure(to, sys.pairs)
     gs = Adapt.adapt_structure(to, sys.gs)
     #ewald = Adapt.adapt_structure(to, sys.ewald)
-    SystemDevice(crystal, extfield, interactions_union, gs)
+    SystemDevice(crystal, extfield, interactions_union, pairs, gs)
 end
