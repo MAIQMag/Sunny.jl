@@ -61,11 +61,11 @@ struct PairCoupling
 end
 
 # Pair couplings are counted only once per bond
-struct PairCouplingDevice{C, D}
+struct PairCouplingDevice
     isculled :: Bool
     bond     :: Bond
-    bilin    :: C # Bilinear
-    biquad   :: D # Biquadratic
+    bilin    :: Union{Float64, Mat3} # Bilinear
+    biquad   :: Union{Float64, Mat5} # Biquadratic
 end
 
 PairCouplingDevice(host::PairCoupling) = PairCouplingDevice(host.isculled, host.bond, host.bilin, host.biquad)
@@ -177,27 +177,20 @@ function SystemDevice(host::System)
     crystal = CrystalDevice(host.crystal)
     extfield = CUDA.CuArray(host.extfield)
     gs = CUDA.CuArray(host.gs)
-    pairs_h = PairCouplingDevice{SMatrix{3, 3, Float64, 9}, Float64}[]
+    pairs_h = PairCouplingDevice[]
     interactions_h = InteractionsDevice{StevensExpansion, Pair{Int64, Int64}}[]
 
-    indexes = Pair{Int,Int}[]
     for int in host.interactions_union
         first = length(pairs_h) + 1
         last = length(pairs_h) + length(int.pair)
-        push!(indexes, Pair(first,last))
         for pair in int.pair
             push!(pairs_h, PairCouplingDevice(pair))
         end
-    end
-    pairs_d = CuVector(pairs_h)
-    for (i, int) in enumerate(host.interactions_union)
-        println(indexes[i][1],' ', indexes[i][2])
-        a = InteractionsDevice(int, indexes[i])
-        println(typeof(a))
+        a = InteractionsDevice(int, Pair(first, last))
         push!(interactions_h, a)
     end
+    pairs_d = CuVector(pairs_h)
     interactions_d = CuVector(interactions_h)
-
     return SystemDevice(crystal, extfield, interactions_d, pairs_d, gs)
 end
 
