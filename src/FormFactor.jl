@@ -19,10 +19,10 @@ struct FormFactor
     g :: Float64
 end
 
-struct FormFactorDevice{A,B,C}
-    j0 :: A
-    j2 :: B
-    g  :: C
+struct FormFactorDevice
+    j0 :: ExpandedBesselIntegral
+    j2 :: ExpandedBesselIntegral
+    g  :: Float64
 end
 
 FormFactorDevice(host::FormFactor) = FormFactorDevice(host.j0, host.j2, host.g)
