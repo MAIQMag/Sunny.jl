@@ -126,6 +126,7 @@ function Crystal(latvecs, positions, symbol::Union{Int, String}; types::Union{No
     return crystal_from_spacegroup(latvecs, positions, types, sg; symprec)
 end
 
+
 # Sunny crystal specification is agnostic to length units. Spglib, however,
 # expects lattice vector magnitudes to be order one. The wrappers below do the
 # following: (1) Non-dimensionalize the lattice vectors using a natural length

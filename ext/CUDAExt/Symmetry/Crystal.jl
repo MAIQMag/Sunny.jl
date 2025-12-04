@@ -11,4 +11,9 @@ function Adapt.adapt_structure(to, data::CrystalDevice)
     CrystalDevice(latvecs, positions)
 end
 
+"""
+    natoms(cryst::CrystalDevice)
+
+Number of atoms in the unit cell, i.e., number of Bravais sublattices.
+"""
 @inline Sunny.natoms(cryst::CrystalDevice) = length(cryst.positions)
