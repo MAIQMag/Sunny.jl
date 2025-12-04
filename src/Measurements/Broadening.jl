@@ -33,7 +33,6 @@ function (b::Broadening)(ϵ, ω)
     b.kernel(ω - ϵ)
 end
 
-
 function (b::NonstationaryBroadening)(ϵ, ω)
     b.kernel(ϵ, ω)
 end
