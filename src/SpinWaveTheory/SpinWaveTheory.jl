@@ -79,7 +79,10 @@ struct SpinWaveTheoryDevice{TSys, TData, TMeasure}
     regularization :: Float64
 end
 
-SpinWaveTheoryDevice(host::SpinWaveTheory) = SpinWaveTheoryDevice(SystemDevice(host.sys), SWTDataDipoleDevice(host.data), MeasureSpecDevice(host.measure), host.regularization)
+function SpinWaveTheoryDevice(host::SpinWaveTheory)
+    MeasureSpecDevice = Base.get_extension(Sunny, :CUDAExt).MeasureSpecDevice
+    return SpinWaveTheoryDevice(SystemDevice(host.sys), SWTDataDipoleDevice(host.data), MeasureSpecDevice(host.measure), host.regularization)
+end
 
 function Adapt.adapt_structure(to, swt::SpinWaveTheoryDevice)
     sys = Adapt.adapt_structure(to, swt.sys)

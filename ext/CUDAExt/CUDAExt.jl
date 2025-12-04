@@ -7,4 +7,6 @@ using Sunny
 include("Symmetry/Crystal.jl")
 include("Measurements/IntensitiesTypes.jl")
 include("Measurements/Broadening.jl")
+include("Measurements/MeasureSpec.jl")
+
 end
