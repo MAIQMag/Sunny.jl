@@ -19,21 +19,6 @@ struct FormFactor
     g :: Float64
 end
 
-struct FormFactorDevice
-    j0 :: ExpandedBesselIntegral
-    j2 :: ExpandedBesselIntegral
-    g  :: Float64
-end
-
-FormFactorDevice(host::FormFactor) = FormFactorDevice(host.j0, host.j2, host.g)
-
-function Adapt.adapt_structure(to, data::FormFactorDevice)
-    j0 = Adapt.adapt_structure(to, data.j0)
-    j2 = Adapt.adapt_structure(to, data.j2)
-    g = Adapt.adapt_structure(to, data.g)
-    FormFactorDevice(j0, j2, g)
-end
-
 function Base.one(::Type{FormFactor})
     j0 = ExpandedBesselIntegral(0, 0, 0, 0, 0, 0, 0, 0, 1)
     j2 = ExpandedBesselIntegral(0, 0, 0, 0, 0, 0, 0, 0, 0)
