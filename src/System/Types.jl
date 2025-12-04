@@ -174,6 +174,7 @@ struct SystemDevice{TCrystal, TArrField, TArrInt, TPairs, TArrGs}
 end
 
 function SystemDevice(host::System)
+    CrystalDevice = Base.get_extension(Sunny, :CUDAExt).CrystalDevice
     crystal = CrystalDevice(host.crystal)
     extfield = CUDA.CuArray(host.extfield)
     gs = CUDA.CuArray(host.gs)

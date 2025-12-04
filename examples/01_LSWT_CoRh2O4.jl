@@ -15,7 +15,7 @@
 #
 # From the Julia prompt, load Sunny and also [GLMakie](https://docs.makie.org/)
 # for graphics.
-
+using CUDA
 using Sunny, GLMakie
 
 # If these packages are not yet installed, Julia will offer to install them. If
@@ -53,7 +53,6 @@ latvecs = lattice_vectors(a, a, a, 90, 90, 90)
 
 positions = [[1/8, 1/8, 1/8]]
 cryst = Crystal(latvecs, positions, 227; types=["Co"])
-
 # [`view_crystal`](@ref) launches an interface for interactive inspection and
 # symmetry analysis.
 
