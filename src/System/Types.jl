@@ -60,43 +60,12 @@ struct PairCoupling
     end
 end
 
-# Pair couplings are counted only once per bond
-struct PairCouplingDevice
-    isculled :: Bool
-    bond     :: Bond
-    bilin    :: Union{Float64, Mat3} # Bilinear
-    biquad   :: Union{Float64, Mat5} # Biquadratic
-end
-
-PairCouplingDevice(host::PairCoupling) = PairCouplingDevice(host.isculled, host.bond, host.bilin, host.biquad)
-
-function Adapt.adapt_structure(to, sys::PairCouplingDevice)
-    isculled = Adapt.adapt_structure(to, sys.isculled)
-    bond = Adapt.adapt_structure(to, sys.bond)
-    bilin = Adapt.adapt_structure(to, sys.bilin)
-    biquad = Adapt.adapt_structure(to, sys.biquad)
-    PairCouplingDevice(isculled, bond, bilin, biquad)
-end
-
 mutable struct Interactions
     # Onsite coupling is either an N×N Hermitian matrix or possibly renormalized
     # Stevens coefficients, depending on the mode :SUN or :dipole.
     onsite :: Union{HermitianC64, StevensExpansion}
     # Pair couplings for every bond that starts at the given atom
     pair :: Vector{PairCoupling}
-end
-
-struct InteractionsDevice{TSExpansion, TPair}
-    onsite  :: TSExpansion
-    pair    :: TPair
-end
-
-InteractionsDevice(host::Interactions, pair_idx) = InteractionsDevice(host.onsite, pair_idx)
-
-function Adapt.adapt_structure(to, inter::InteractionsDevice)
-    onsite = Adapt.adapt_structure(to, inter.onsite)
-    pair = Adapt.adapt_structure(to, inter.pair)
-    InteractionsDevice(onsite, pair)
 end
 
 const rFTPlan = FFTW.rFFTWPlan{Float64, -1, false, 5, UnitRange{Int64}}
@@ -115,22 +84,6 @@ struct Ewald
     Fϕ       :: Array{ComplexF64, 5}  # Cross correlation, F[ϕ] = conj(F[A]) F[s]  [α,m1,m2,m3,i]
     plan     :: rFTPlan
     ift_plan :: rIFTPlan
-end
-
-struct EwaldDevice
-    μ0_μB²   :: Float64               # Strength of dipole-dipole interactions
-    demag    :: Mat3                  # Demagnetization factor
-    A        :: CUDA.CuArray{Mat3, 5}        # Interaction matrices in real-space         [offset+1,i,j]
-end
-
-EwaldDevice(host::Ewald) = EwaldDevice(μ0_μB², demag, CUDA.CuArray(host.A))
-EwaldDevice(host::Nothing) = Nothing()
-
-function Adapt.adapt_structure(to, sys::EwaldDevice)
-    μ0_μB² = Adapt.adapt_structure(to, sys.μ0_μB²)
-    demag = Adapt.adapt_structure(to, sys.demag)
-    A = Adapt.adapt_structure(to, sys.A)
-    EwaldDevice(μ0_μB², demag, A)
 end
 
 mutable struct System{N}
@@ -162,45 +115,4 @@ mutable struct System{N}
 
     # Global data
     const rng              :: Random.Xoshiro
-end
-
-struct SystemDevice{TCrystal, TArrField, TArrInt, TPairs, TArrGs}
-    crystal            :: TCrystal
-    extfield           :: TArrField # External B field
-    interactions_union :: TArrInt # Interactions
-    pairs              :: TPairs
-    gs                 :: TArrGs # g-tensor per atom in unit cell
-    #ewald              :: Union{EwaldDevice, Nothing}
-end
-
-function SystemDevice(host::System)
-    CrystalDevice = Base.get_extension(Sunny, :CUDAExt).CrystalDevice
-    crystal = CrystalDevice(host.crystal)
-    extfield = CUDA.CuArray(host.extfield)
-    gs = CUDA.CuArray(host.gs)
-    pairs_h = PairCouplingDevice[]
-    interactions_h = InteractionsDevice{StevensExpansion, Pair{Int64, Int64}}[]
-
-    for int in host.interactions_union
-        first = length(pairs_h) + 1
-        last = length(pairs_h) + length(int.pair)
-        for pair in int.pair
-            push!(pairs_h, PairCouplingDevice(pair))
-        end
-        a = InteractionsDevice(int, Pair(first, last))
-        push!(interactions_h, a)
-    end
-    pairs_d = CuVector(pairs_h)
-    interactions_d = CuVector(interactions_h)
-    return SystemDevice(crystal, extfield, interactions_d, pairs_d, gs)
-end
-
-function Adapt.adapt_structure(to, sys::SystemDevice)
-    crystal = Adapt.adapt_structure(to, sys.crystal)
-    extfield = Adapt.adapt_structure(to, sys.extfield)
-    interactions_union = Adapt.adapt_structure(to, sys.interactions_union)
-    pairs = Adapt.adapt_structure(to, sys.pairs)
-    gs = Adapt.adapt_structure(to, sys.gs)
-    #ewald = Adapt.adapt_structure(to, sys.ewald)
-    SystemDevice(crystal, extfield, interactions_union, pairs, gs)
 end

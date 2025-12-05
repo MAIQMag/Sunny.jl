@@ -81,6 +81,7 @@ end
 
 function SpinWaveTheoryDevice(host::SpinWaveTheory)
     MeasureSpecDevice = Base.get_extension(Sunny, :CUDAExt).MeasureSpecDevice
+    SystemDevice = Base.get_extension(Sunny, :CUDAExt).SystemDevice
     return SpinWaveTheoryDevice(SystemDevice(host.sys), SWTDataDipoleDevice(host.data), MeasureSpecDevice(host.measure), host.regularization)
 end
 
