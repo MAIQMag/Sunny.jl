@@ -270,6 +270,7 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     # q_reshaped in RLU for the possibly-reshaped crystal.
     reshaped_rlu = inv(2π) * sys.crystal.latvecs' * orig_crystal(sys).recipvecs
     H_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
+    SpinWaveTheoryDevice = Base.get_extension(Sunny, :CUDAExt).SpinWaveTheoryDevice
     swt_d = SpinWaveTheoryDevice(swt)
     dynamical_matrix!(H_d, swt_d, reshaped_rlu, qs_d)
 
