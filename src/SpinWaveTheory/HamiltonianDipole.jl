@@ -148,7 +148,7 @@ function swt_hamiltonian_dipole!(H::Matrix{ComplexF64}, swt::SpinWaveTheory, q_r
     end
 
     # H must be hermitian up to round-off errors
-    @assert Sunny.diffnorm2(H, H') < 1e-12
+    @assert diffnorm2(H, H') < 1e-12
 
     # Make H exactly hermitian
     hermitianpart!(H)
@@ -158,6 +158,8 @@ function swt_hamiltonian_dipole!(H::Matrix{ComplexF64}, swt::SpinWaveTheory, q_r
         H[i, i] += swt.regularization
     end
 end
+
+
 
 function multiply_by_hamiltonian_dipole!(y::AbstractMatrix{ComplexF64}, x::AbstractMatrix{ComplexF64}, swt::SpinWaveTheory, qs_reshaped::Vector{Vec3};
                                          phases=zeros(ComplexF64, size(qs_reshaped)))

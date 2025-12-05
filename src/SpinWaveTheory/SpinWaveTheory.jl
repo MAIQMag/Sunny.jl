@@ -80,6 +80,7 @@ function nbands(swt::SpinWaveTheory)
     return nflavors(swt) * natoms(sys.crystal)
 end
 
+
 function to_standard_rlu(sys::System, q_reshaped)
     return orig_crystal(sys).recipvecs \ (sys.crystal.recipvecs * q_reshaped)
 end
