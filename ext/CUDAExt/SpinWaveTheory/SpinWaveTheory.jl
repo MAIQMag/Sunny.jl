@@ -17,8 +17,8 @@ end
 
 struct SWTDataSUNDevice
     local_unitaries       :: AbstractVector{AbstractMatrix{ComplexF64}} # Transformations from global to quantization frame
-    observables_localized :: AbstractArray{Sunny.HermitianC64Device, 2}      # Observables rotated to local frame (nobs × nsites)
-    spins_localized       :: AbstractArray{Sunny.HermitianC64Device, 2}      # Spins rotated to local frame (3 × nsites)
+    observables_localized :: AbstractArray{HermitianC64Device, 2}      # Observables rotated to local frame (nobs × nsites)
+    spins_localized       :: AbstractArray{HermitianC64Device, 2}      # Spins rotated to local frame (3 × nsites)
 end
 
 SWTDataSUNDevice(host::Sunny.SWTDataSUN) = SWTDataSUNDevice(CUDA.CuVector(host.local_unitaries), CUDA.CuArray(host.observables_localized), CUDA.CuArray(host.spins_localized))

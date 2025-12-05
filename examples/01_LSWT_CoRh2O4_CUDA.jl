@@ -15,9 +15,8 @@
 #
 # From the Julia prompt, load Sunny and also [GLMakie](https://docs.makie.org/)
 # for graphics.
-
+using CUDA
 using Sunny, GLMakie
-
 # If these packages are not yet installed, Julia will offer to install them. If
 # executing this tutorial gives an error, you may need to update Sunny and
 # GLMakie from the [built-in package
@@ -29,7 +28,7 @@ using Sunny, GLMakie
 # and uses these to provide physical constants. For example, `units.K` returns
 # one kelvin as 0.086 meV, where the Boltzmann constant is implicit.
 
-units = Units(:meV, :angstrom);
+units = Units(:meV, :angstrom)
 
 # ### Crystal cell
 #
@@ -53,11 +52,10 @@ latvecs = lattice_vectors(a, a, a, 90, 90, 90)
 
 positions = [[1/8, 1/8, 1/8]]
 cryst = Crystal(latvecs, positions, 227; types=["Co"])
-
 # [`view_crystal`](@ref) launches an interface for interactive inspection and
 # symmetry analysis.
 
-view_crystal(cryst)
+#view_crystal(cryst)
 
 # ### Spin system
 
@@ -80,7 +78,7 @@ sys = System(cryst, [1 => Moment(s=3/2, g=2)], :dipole)
 
 J = +0.63 # (meV)
 set_exchange!(sys, J, Bond(2, 3, [0, 0, 0]))
-view_crystal(sys)
+#view_crystal(sys)
 
 # ### Optimizing spins
 
@@ -92,7 +90,7 @@ view_crystal(sys)
 
 randomize_spins!(sys)
 minimize_energy!(sys)
-plot_spins(sys; color=[S[3] for S in sys.dipoles])
+#plot_spins(sys; color=[S[3] for S in sys.dipoles])
 
 # The diamond lattice is bipartite, allowing each spin to perfectly anti-align
 # with its 4 nearest-neighbors. Each of these 4 bonds contribute ``-J s^2`` to
@@ -118,7 +116,7 @@ sys_prim = reshape_supercell(sys, shape)
 # Plotting `sys_prim` shows the two spins within the primitive cell, as well as
 # the larger conventional cubic cell for context.
 
-plot_spins(sys_prim; color=[S[3] for S in sys_prim.dipoles])
+#plot_spins(sys_prim; color=[S[3] for S in sys_prim.dipoles])
 
 # ### Spin wave theory
 
@@ -152,7 +150,9 @@ path = q_space_path(cryst, qs, 500)
 # result.
 
 energies = range(0, 6, 300)
-res = intensities(swt, path; energies, kernel)
+@time res_d = intensities(swt, path; energies, kernel)
+@time res_d = intensities(swt, path; energies, kernel)
+res = Sunny.Intensities(res_d)
 plot_intensities(res; units, title="CoRh₂O₄ LSWT")
 
 # Sometimes experimental data is only available as a powder average, i.e., as an
@@ -163,11 +163,11 @@ plot_intensities(res; units, title="CoRh₂O₄ LSWT")
 # calculation completes in about two seconds. Had we used the conventional cubic
 # cell, the calculation would be an order of magnitude slower.
 
-radii = range(0, 3, 200) # (1/Å)
-res = powder_average(cryst, radii, 2000) do qs
-    intensities(swt, qs; energies, kernel)
-end
-plot_intensities(res; units, saturation=1.0, title="CoRh₂O₄ Powder Average")
+#radii = range(0, 3, 200) # (1/Å)
+#res = powder_average(cryst, radii, 2000) do qs
+#    intensities(swt, qs; energies, kernel)
+#end
+#plot_intensities(res; units, saturation=1.0, title="CoRh₂O₄ Powder Average")
 
 # This result can be compared to experimental neutron scattering data
 # from Fig. 5 of [Ge et al.](https://doi.org/10.1103/PhysRevB.96.064413)
