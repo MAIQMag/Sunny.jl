@@ -33,14 +33,15 @@ WGLMakie = "276b4fcb-3e11-5398-bf8b-a0c2d153d008"
 WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
 
 [extensions]
+CUDAExt = "CUDA"
 ExportVTKExt = "WriteVTK"
 GLMakiePrecompilesExt = ["Makie", "GLMakie"]
 PlottingExt = "Makie"
 WGLMakiePrecompilesExt = ["Makie", "WGLMakie"]
-CUDAExt = "CUDA"
 
 [compat]
 Brillouin = "0.5.19"
+CUDA = "5.9.5"
 CrystalInfoFramework = "0.8, 1, 2"
 DynamicPolynomials = "0.6.0"
 ElasticArrays = "1.2.12"

@@ -17,7 +17,6 @@
 # for graphics.
 using CUDA
 using Sunny, GLMakie
-
 # If these packages are not yet installed, Julia will offer to install them. If
 # executing this tutorial gives an error, you may need to update Sunny and
 # GLMakie from the [built-in package
