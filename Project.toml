@@ -40,6 +40,7 @@ PlottingExt = "Makie"
 WGLMakiePrecompilesExt = ["Makie", "WGLMakie"]
 
 [compat]
+Adapt = "4.4.0"
 Brillouin = "0.5.19"
 CUDA = "5.9.5"
 CrystalInfoFramework = "0.8, 1, 2"
