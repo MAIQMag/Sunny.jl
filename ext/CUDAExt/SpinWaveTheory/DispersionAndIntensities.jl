@@ -148,7 +148,8 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     I_dp = [view(I_d,:,:,i) for i in 1:Nq]
     CUBLAS.trsm_batched!('R', 'L', 'C', 'N', ComplexF64(1.), H_dp, I_dp)
     CUBLAS.trsm_batched!('L', 'L', 'N', 'N', ComplexF64(1.), H_dp, I_dp)
-    evalues_d , _ = CUSOLVER.heevjBatched!('V', 'L', I_d)
+    #evalues_d , _ = CUSOLVER.heevjBatched!('V', 'L', I_d)
+    evalues_d , _ = CUSOLVER.XsyevBatched!('V', 'L', I_d)
     CUBLAS.trsm_batched!('L', 'L', 'C', 'N', ComplexF64(1.), H_dp, I_dp)
 
     kernel = @cuda launch=false _frequencies(I_d, evalues_d)

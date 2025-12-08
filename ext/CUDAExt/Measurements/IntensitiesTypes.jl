@@ -21,3 +21,16 @@ struct IntensitiesDevice{T, Q <: Sunny.AbstractQPoints, D} <: Sunny.AbstractInte
 end
 
 Sunny.Intensities(device::IntensitiesDevice) = Sunny.Intensities(device.crystal, device.qpts, device.energies, Array(device.data))
+
+struct PowderIntensitiesDevice{T} <: Sunny.AbstractIntensities
+    # Original chemical cell
+    crystal :: Crystal
+    # q magnitudes in inverse length
+    radii :: Vector{Float64}
+    # Regular grid of energies
+    energies :: Vector{Float64}
+    # Intensity data averaged over shells
+    data :: CUDA.CuArray{T, 2} # (nω × nradii)
+end
+
+Sunny.PowderIntensities(device::PowderIntensitiesDevice) = Sunny.PowderIntensities(device.crystal, device.radii, device.energies, Array(device.data))
