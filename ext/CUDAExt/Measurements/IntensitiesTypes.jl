@@ -34,3 +34,9 @@ struct PowderIntensitiesDevice{T} <: Sunny.AbstractIntensities
 end
 
 Sunny.PowderIntensities(device::PowderIntensitiesDevice) = Sunny.PowderIntensities(device.crystal, device.radii, device.energies, Array(device.data))
+
+function Base.show(io::IO, res::PowderIntensitiesDevice)
+    sz = join(size(res.data), "×")
+    print(io, string(typeof(res)) * " ($sz elements)")
+end
+
