@@ -321,7 +321,13 @@ present in the correlation data. In this case, `energies` must be an explicit
 list specifying the desired output energies, exactly as for `SpinWaveTheory`.
 """
 function intensities(swt::AbstractSpinWaveTheory, qpts; energies, kernel::AbstractBroadening, kT=0, threaded=false)
-    return broaden(intensities_bands(swt, qpts; kT, threaded); energies, kernel, threaded)
+    ext = Base.get_extension(@__MODULE__, :CUDAExt)
+    if ext === nothing
+        return broaden(intensities_bands(swt, qpts; kT, threaded=threaded); energies, kernel, threaded)
+    else
+        # The extension is loaded, you can access its functions/types
+        return broaden(ext.intensities_bands(swt, qpts; kT); energies, kernel)
+    end
 end
 
 """
