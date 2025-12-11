@@ -125,7 +125,7 @@ function powder_average(f, cryst, radii, n::Int; seed=0)
     if ext === nothing
         res = f([Vec3(0,0,0)]) # Dummy call to learn types
         if res isa Intensities
-            data = zeros(length(res.energies), length(radii))
+            data = Array{Float64}(undef, length(res.energies), length(radii))
             ret = PowderIntensities(cryst, collect(radii), res.energies, data)
         elseif res isa StaticIntensities
             data = zeros(length(radii))
@@ -137,7 +137,7 @@ function powder_average(f, cryst, radii, n::Int; seed=0)
         rng = Random.Xoshiro(seed)
         sphpts = sphere_points(n)
         to_rlu = inv(cryst.recipvecs)
-        for (i, radius) in enumerate(radii)
+        Threads.@threads :static for (i, radius) in collect(enumerate(radii))
             R = Mat3(random_orthogonal(rng, 3))
             res = f(Ref(to_rlu * R * radius) .* sphpts)
             if res isa Intensities

@@ -143,6 +143,12 @@ This calculation is analogous to [`intensities`](@ref), but does not perform
 line broadening of the bands.
 """
 function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
+    ext = Base.get_extension(@__MODULE__, :CUDAExt)
+    if ext !== nothing
+        # The extension is loaded, you can access its functions/types
+        return ext.intensities_bands(swt, qpts; kT, with_negative)
+    end
+
     (; sys, measure) = swt
     isempty(measure.observables) && error("No observables! Construct SpinWaveTheory with a `measure` argument.")
     with_negative && error("Option `with_negative=true` not yet supported.")

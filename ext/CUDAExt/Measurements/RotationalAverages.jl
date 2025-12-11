@@ -32,11 +32,23 @@ function powder_average(f, cryst, radii, n::Int, seed::Int)
     rng = Random.Xoshiro(seed)
     sphpts = Sunny.sphere_points(n)
     to_rlu = inv(cryst.recipvecs)
-    for (i, radius) in enumerate(radii)
-        R = Sunny.Mat3(Sunny.random_orthogonal(rng, 3))
-        res = f(Ref(to_rlu * R * radius) .* sphpts)
+
+    batch_size = 8
+    batches = Iterators.partition(radii, batch_size)
+
+    for (batch_idx, radii_batch) in enumerate(batches)
+        tmp = Array{Sunny.Vec3}(undef, length(sphpts), length(radii_batch))
+        for (ii, radius) in enumerate(radii_batch)
+            R = Sunny.Mat3(Sunny.random_orthogonal(rng, 3))
+            tmp[:, ii] .= Ref(to_rlu * R * radius) .* sphpts
+        end
+        tmp_v = view(tmp,:,:)
+        res = f(reshape(tmp_v,length(sphpts)*length(radii_batch)))
+        res_data = reshape(view(res.data,:,:), length(res.energies), length(sphpts), length(radii_batch))
         if res isa IntensitiesDevice
-            data[:, i] .= Statistics.mean(res.data; dims=2)
+            start = (batch_idx-1)*batch_size
+            mean = Statistics.mean(res_data; dims=2)
+            view(data,:, start+1:start+length(radii_batch)) .= view(mean,:,1,:)
         else
             error("Provided function must call `IntensitiesDevice`.")
         end

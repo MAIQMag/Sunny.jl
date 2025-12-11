@@ -70,5 +70,8 @@ kernel = gaussian(fwhm=0.05)
 @time res_d = powder_average(cryst, radii, 200) do qs
     intensities(swt, qs; energies, kernel)
 end
+@time res_d = powder_average(cryst, radii, 200) do qs
+    intensities(swt, qs; energies, kernel)
+end
 res = Sunny.PowderIntensities(res_d)
 plot_intensities(res; units, colorrange=(0, 20))
