@@ -120,7 +120,7 @@ end
 plot_intensities(res)
 ```
 """
-function powder_average(f, cryst, radii, n::Int; seed=0)
+function powder_average(f, cryst, radii, n::Int; seed=0, batch_size=1)
     ext = Base.get_extension(@__MODULE__, :CUDAExt)
     if ext === nothing
         res = f([Vec3(0,0,0)]) # Dummy call to learn types
@@ -149,7 +149,7 @@ function powder_average(f, cryst, radii, n::Int; seed=0)
 
         return ret
     end
-    return ext.powder_average(f, cryst, radii, n, seed)
+    return ext.powder_average(f, cryst, radii, n, seed, batch_size)
 end
 
 #

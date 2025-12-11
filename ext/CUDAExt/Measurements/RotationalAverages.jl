@@ -20,7 +20,7 @@ end
 plot_intensities(res)
 ```
 """
-function powder_average(f, cryst, radii, n::Int, seed::Int)
+function powder_average(f, cryst, radii, n::Int, seed::Int, batch_size::Int)
     res = f([Sunny.Vec3(0,0,0)]) # Dummy call to learn types
     if res isa IntensitiesDevice
         data = CUDA.zeros(Float64, length(res.energies), length(radii))
@@ -33,7 +33,6 @@ function powder_average(f, cryst, radii, n::Int, seed::Int)
     sphpts = Sunny.sphere_points(n)
     to_rlu = inv(cryst.recipvecs)
 
-    batch_size = 8
     batches = Iterators.partition(radii, batch_size)
 
     for (batch_idx, radii_batch) in enumerate(batches)
