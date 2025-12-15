@@ -47,7 +47,7 @@ function _intensities(swt, qs, L, Ncells, H, Nobs, Na, Ncorr, recipvecs, intensi
     if iq > size(H,3)
         return
     end
-    q = Sunny.Vec3(view(qs,:,iq))
+    q = qs[iq]
     Hq = view(H,:,:,iq)
     corrbuf = CuDynamicSharedArray(ComplexF64, (Ncorr, blockDim().x))
     corrbufq = view(corrbuf,:,threadIdx().x)
@@ -55,7 +55,6 @@ function _intensities(swt, qs, L, Ncells, H, Nobs, Na, Ncorr, recipvecs, intensi
     Avec_prefq = view(Avec_pref,:,:,threadIdx().x)
 
     (; sys, data, measure) = swt
-    q = Sunny.Vec3(view(qs,:,iq))
     q_global = recipvecs * q
     for i in 1:Na, μ in 1:Nobs
         r_global = global_position(sys, (1, 1, 1, i)) # + offsets[μ, i]
@@ -106,6 +105,7 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     @assert isnothing(sys.ewald)
 
     qpts = convert(Sunny.AbstractQPoints, qpts)
+
     cryst = Sunny.orig_crystal(sys)
 
     # Number of (magnetic) atoms in magnetic cell
@@ -122,11 +122,7 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     Nobs = Sunny.num_observables(measure)
     Ncorr = Sunny.num_correlations(measure)
 
-    qs_h = zeros(Float64, 3, Nq)
-    for (iq, q) in enumerate(qpts.qs)
-        view(qs_h, :, iq) .= q #to_reshaped_rlu(swt.sys, q)
-    end
-    qs_d = CuArray(qs_h)
+    qs_d = CuArray(qpts.qs)
 
     # Given q in reciprocal lattice units (RLU) for the original crystal, return a
     # q_reshaped in RLU for the possibly-reshaped crystal.
