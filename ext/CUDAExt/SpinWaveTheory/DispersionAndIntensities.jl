@@ -122,7 +122,7 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     Nobs = Sunny.num_observables(measure)
     Ncorr = Sunny.num_correlations(measure)
 
-    qs_d = CuArray(qpts.qs)
+    qs_d = qpts.qs
 
     # Given q in reciprocal lattice units (RLU) for the original crystal, return a
     # q_reshaped in RLU for the possibly-reshaped crystal.

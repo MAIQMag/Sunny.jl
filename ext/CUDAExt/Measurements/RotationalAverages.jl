@@ -21,7 +21,7 @@ plot_intensities(res)
 ```
 """
 function powder_average(f, cryst, radii, n::Int, seed::Int, batch_size::Int)
-    res = f([Sunny.Vec3(0,0,0)]) # Dummy call to learn types
+    res = f(CUDA.CuArray([Sunny.Vec3(0,0,0)])) # Dummy call to learn types
     if res isa IntensitiesDevice
         data = CUDA.zeros(Float64, length(res.energies), length(radii))
         ret = PowderIntensitiesDevice(cryst, collect(radii), res.energies, data)
@@ -30,19 +30,18 @@ function powder_average(f, cryst, radii, n::Int, seed::Int, batch_size::Int)
     end
 
     rng = Random.Xoshiro(seed)
-    sphpts = Sunny.sphere_points(n)
+    sphpts = CUDA.CuArray(Sunny.sphere_points(n))
     to_rlu = inv(cryst.recipvecs)
 
+    tmp = CUDA.CuArray{Sunny.Vec3}(undef, length(sphpts), batch_size)
     batches = Iterators.partition(radii, batch_size)
-
     for (batch_idx, radii_batch) in enumerate(batches)
-        tmp = Array{Sunny.Vec3}(undef, length(sphpts), length(radii_batch))
         for (ii, radius) in enumerate(radii_batch)
             R = Sunny.Mat3(Sunny.random_orthogonal(rng, 3))
             tmp[:, ii] .= Ref(to_rlu * R * radius) .* sphpts
         end
-        tmp_v = view(tmp,:,:)
-        res = f(reshape(tmp_v,length(sphpts)*length(radii_batch)))
+        tmp_v = reshape(view(tmp,:,1:length(radii_batch)), length(sphpts)*length(radii_batch))
+        res = f(tmp_v)
         res_data = reshape(view(res.data,:,:), length(res.energies), length(sphpts), length(radii_batch))
         if res isa IntensitiesDevice
             start = (batch_idx-1)*batch_size

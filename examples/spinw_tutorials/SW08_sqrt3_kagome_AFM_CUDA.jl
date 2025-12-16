@@ -70,7 +70,7 @@ kernel = gaussian(fwhm=0.05)
 @time res_d = powder_average(cryst, radii, 200) do qs
     intensities(swt, qs; energies, kernel)
 end
-for i in 1:8
+for i in 1:3
     println(i)
     @time global res_d = powder_average(cryst, radii, 200, batch_size=i) do qs
         intensities(swt, qs; energies, kernel)
