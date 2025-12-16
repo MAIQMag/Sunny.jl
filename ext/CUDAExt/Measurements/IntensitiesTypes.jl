@@ -20,7 +20,16 @@ struct IntensitiesDevice{T, Q <: Sunny.AbstractQPoints, D} <: Sunny.AbstractInte
     data :: CUDA.CuArray{T, D} # (nω × nq...)
 end
 
-Sunny.Intensities(device::IntensitiesDevice) = Sunny.Intensities(device.crystal, Sunny.QPath(device.qpts), device.energies, Array(device.data))
+function Sunny.Intensities(device::IntensitiesDevice)
+    if device.qpts isa QPathDevice
+        qpts = Sunny.QPath(device.qpts)
+    elseif device.qpts isa QPointsDevice
+        qpts = Sunny.QPoints(device.qpts)
+    else
+        qpts = device.qpts
+    end
+    return Sunny.Intensities(device.crystal, qpts, device.energies, Array(device.data))
+end
 
 struct PowderIntensitiesDevice{T} <: Sunny.AbstractIntensities
     # Original chemical cell
