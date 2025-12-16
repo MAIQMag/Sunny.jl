@@ -45,19 +45,24 @@ function Adapt.adapt_structure(to, sys::EwaldDevice)
     EwaldDevice(μ0_μB², demag, A)
 end
 
-struct SystemDevice{TCrystal, TArrField, TArrInt, TPairs, TArrGs}
+struct SystemDevice{TCrystal, TArrField, TArrInt, TPairs, TArrGs, TDipole}
     crystal            :: TCrystal
+    dims               :: NTuple{3, Int}
     extfield           :: TArrField # External B field
     interactions_union :: TArrInt # Interactions
     pairs              :: TPairs
     gs                 :: TArrGs # g-tensor per atom in unit cell
     #ewald              :: Union{EwaldDevice, Nothing}
+    dipoles            :: TDipole # Expected dipoles
 end
 
 function SystemDevice(host::Sunny.System)
+    @assert host.origin === Nothing
     crystal = CrystalDevice(host.crystal)
+    dims = host.dims
     extfield = CUDA.CuArray(host.extfield)
     gs = CUDA.CuArray(host.gs)
+    dipoles = CUDA.CuArray(host.dipoles)
     pairs_h = PairCouplingDevice[]
     interactions_h = InteractionsDevice{Sunny.StevensExpansion, Pair{Int64, Int64}}[]
 
@@ -72,15 +77,21 @@ function SystemDevice(host::Sunny.System)
     end
     pairs_d = CuVector(pairs_h)
     interactions_d = CuVector(interactions_h)
-    return SystemDevice(crystal, extfield, interactions_d, pairs_d, gs)
+    return SystemDevice(crystal, dims, extfield, interactions_d, pairs_d, gs, dipoles)
 end
+
+#function SystemDevice(host::Nothing)
+#    return host
+#end
 
 function Adapt.adapt_structure(to, sys::SystemDevice)
     crystal = Adapt.adapt_structure(to, sys.crystal)
+    dims = Adapt.adapt_structure(to, sys.dims)
     extfield = Adapt.adapt_structure(to, sys.extfield)
     interactions_union = Adapt.adapt_structure(to, sys.interactions_union)
     pairs = Adapt.adapt_structure(to, sys.pairs)
     gs = Adapt.adapt_structure(to, sys.gs)
     #ewald = Adapt.adapt_structure(to, sys.ewald)
-    SystemDevice(crystal, extfield, interactions_union, pairs, gs)
+    dipoles = Adapt.adapt_structure(to, sys.dipoles)
+    SystemDevice(crystal, dims, extfield, interactions_union, pairs, gs, dipoles)
 end

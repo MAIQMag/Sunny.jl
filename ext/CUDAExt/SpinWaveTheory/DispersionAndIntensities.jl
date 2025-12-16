@@ -90,12 +90,12 @@ Calculate spin wave excitation bands for a set of q-points in reciprocal space.
 This calculation is analogous to [`intensities`](@ref), but does not perform
 line broadening of the bands.
 """
-function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
+function intensities_bands(swt::SpinWaveTheoryDevice, qpts; kT=0, with_negative=false)
     (; sys, measure) = swt
     isempty(measure.observables) && error("No observables! Construct SpinWaveTheory with a `measure` argument.")
     with_negative && error("Option `with_negative=true` not yet supported.")
-    @assert sys.mode in (:dipole, :dipole_uncorrected)
-    @assert isnothing(sys.ewald)
+    #@assert sys.mode in (:dipole, :dipole_uncorrected)
+    #@assert isnothing(sys.ewald)
 
     qpts = convert(Sunny.AbstractQPoints, qpts)
 
@@ -121,8 +121,7 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     # q_reshaped in RLU for the possibly-reshaped crystal.
     reshaped_rlu = inv(2π) * sys.crystal.latvecs' * Sunny.orig_crystal(sys).recipvecs
     H_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
-    swt_d = SpinWaveTheoryDevice(swt)
-    Sunny.dynamical_matrix!(H_d, swt_d, reshaped_rlu, qs_d)
+    Sunny.dynamical_matrix!(H_d, swt, reshaped_rlu, qs_d)
 
     H_dp = [view(H_d,:,:,i) for i in 1:Nq]
     CUSOLVER.potrfBatched!('L', H_dp)
@@ -158,12 +157,12 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
     disp_d = view(evalues_d,L+1:2L, :)
 
     intensity_d = CUDA.zeros(eltype(measure), L, Nq)
-    kernel = @cuda launch=false _intensities(swt_d, qs_d, L, Ncells, I_d, Nobs, Na, Ncorr, cryst.recipvecs, intensity_d, kT, disp_d)
+    kernel = @cuda launch=false _intensities(swt, qs_d, L, Ncells, I_d, Nobs, Na, Ncorr, cryst.recipvecs, intensity_d, kT, disp_d)
     get_shmem(threads; Nobs=Nobs, Na=Na, Ncorr=Ncorr) = threads * sizeof(ComplexF64) * (Nobs * (1 + Na) + Ncorr)
     config = launch_configuration(kernel.fun, shmem=threads->get_shmem(threads))
     threads = Base.min(Nq, config.threads)
     blocks = cld(Nq, threads)
-    kernel(swt_d, qs_d, L, Ncells, I_d, Nobs, Na, Ncorr, cryst.recipvecs, intensity_d, kT, disp_d; threads=threads, blocks=blocks, shmem=get_shmem(threads))
+    kernel(swt, qs_d, L, Ncells, I_d, Nobs, Na, Ncorr, cryst.recipvecs, intensity_d, kT, disp_d; threads=threads, blocks=blocks, shmem=get_shmem(threads))
 
     disp_d = reshape(CuArray(disp_d), L, size(qpts.qs)...)
     intensity_d = reshape(intensity_d, L, size(qpts.qs)...)
