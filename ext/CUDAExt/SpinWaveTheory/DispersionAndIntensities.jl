@@ -99,7 +99,7 @@ function intensities_bands(swt::SpinWaveTheoryDevice, qpts; kT=0, with_negative=
 
     qpts = convert(Sunny.AbstractQPoints, qpts)
 
-    cryst = Sunny.orig_crystal(sys)
+    cryst = sys.original_crystal
 
     # Number of (magnetic) atoms in magnetic cell
     @assert sys.dims == (1,1,1)
@@ -119,7 +119,7 @@ function intensities_bands(swt::SpinWaveTheoryDevice, qpts; kT=0, with_negative=
 
     # Given q in reciprocal lattice units (RLU) for the original crystal, return a
     # q_reshaped in RLU for the possibly-reshaped crystal.
-    reshaped_rlu = inv(2π) * sys.crystal.latvecs' * Sunny.orig_crystal(sys).recipvecs
+    reshaped_rlu = inv(2π) * sys.crystal.latvecs' * cryst.recipvecs
     H_d = CUDA.zeros(ComplexF64, 2L, 2L, Nq)
     Sunny.dynamical_matrix!(H_d, swt, reshaped_rlu, qs_d)
 

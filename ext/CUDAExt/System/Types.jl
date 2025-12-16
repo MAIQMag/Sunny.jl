@@ -46,6 +46,7 @@ function Adapt.adapt_structure(to, sys::EwaldDevice)
 end
 
 struct SystemDevice{TCrystal, TArrField, TArrInt, TPairs, TArrGs, TDipole}
+    original_crystal   :: TCrystal
     crystal            :: TCrystal
     dims               :: NTuple{3, Int}
     extfield           :: TArrField # External B field
@@ -57,7 +58,7 @@ struct SystemDevice{TCrystal, TArrField, TArrInt, TPairs, TArrGs, TDipole}
 end
 
 function SystemDevice(host::Sunny.System)
-    @assert host.origin === Nothing
+    original_crystal = CrystalDevice(Sunny.orig_crystal(host))
     crystal = CrystalDevice(host.crystal)
     dims = host.dims
     extfield = CUDA.CuArray(host.extfield)
@@ -77,14 +78,11 @@ function SystemDevice(host::Sunny.System)
     end
     pairs_d = CuVector(pairs_h)
     interactions_d = CuVector(interactions_h)
-    return SystemDevice(crystal, dims, extfield, interactions_d, pairs_d, gs, dipoles)
+    return SystemDevice(original_crystal, crystal, dims, extfield, interactions_d, pairs_d, gs, dipoles)
 end
 
-#function SystemDevice(host::Nothing)
-#    return host
-#end
-
 function Adapt.adapt_structure(to, sys::SystemDevice)
+    original_crystal = Adapt.adapt_structure(to, sys.original_crystal)
     crystal = Adapt.adapt_structure(to, sys.crystal)
     dims = Adapt.adapt_structure(to, sys.dims)
     extfield = Adapt.adapt_structure(to, sys.extfield)
@@ -93,5 +91,5 @@ function Adapt.adapt_structure(to, sys::SystemDevice)
     gs = Adapt.adapt_structure(to, sys.gs)
     #ewald = Adapt.adapt_structure(to, sys.ewald)
     dipoles = Adapt.adapt_structure(to, sys.dipoles)
-    SystemDevice(crystal, dims, extfield, interactions_union, pairs, gs, dipoles)
+    SystemDevice(original_crystal, crystal, dims, extfield, interactions_union, pairs, gs, dipoles)
 end
