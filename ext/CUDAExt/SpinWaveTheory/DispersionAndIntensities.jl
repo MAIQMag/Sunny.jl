@@ -15,30 +15,23 @@ function _set_identity(a)
 end
 
 function _frequencies(H, evalues)
-    iq = threadIdx().x + (blockIdx().x - 1) * blockDim().x
-    if iq > size(H, 3)
+    i = threadIdx().x + (blockIdx().x - 1) * blockDim().x
+    if i > size(H, 2)
         return
     end
 
-    Hq = @view H[:, :, iq]
-    λ = @view evalues[:, iq]
-    # Normalize columns of T so that para-unitarity holds, T† Ĩ T = Ĩ.
-    for j in axes(Hq, 2)
-        c = CUDA.rsqrt(abs(λ[j]))
-        view(Hq, :, j) .*= c
+    j = threadIdx().y + (blockIdx().y - 1) * blockDim().y
+    if j > size(H, 3)
+        return
     end
+
+    Hq = @view H[:, i, j]
+    λ = evalues[i, j]
+    # Normalize columns of T so that para-unitarity holds, T† Ĩ T = Ĩ.
+    Hq .*= CUDA.rsqrt(abs(λ))
 
     # Inverse of λ are eigenvalues of Ĩ H, or equivalently, of √H Ĩ √H.
-    for j in eachindex(λ)
-       λ[j] = 1. / λ[j]
-    end
-    # By Sylvester's theorem, "inertia" (sign signature) is invariant under a
-    # congruence transform Ĩ → √H Ĩ √H. The first L elements are positive,
-    # while the next L elements are negative. Their absolute values are
-    # excitation energies for the wavevectors q and -q, respectively.
-
-    #L = div(size(λ), 2)
-    #@assert all(<(0), view(λ, 1:L)) && all(>(0), view(λ, L+1:2L))
+    evalues[i, j] = inv(λ)
     return
 end
 
@@ -150,8 +143,17 @@ function intensities_bands(swt::SpinWaveTheory, qpts; kT=0, with_negative=false)
 
     kernel = @cuda launch=false _frequencies(I_d, evalues_d)
     config = launch_configuration(kernel.fun)
-    threads = Base.min(Nq, config.threads)
-    blocks = cld(Nq, threads)
+    optimal_threads_1d = config.threads
+
+    threads_x = Base.min(2L, optimal_threads_1d)
+    threads_y = optimal_threads_1d ÷ threads_x
+    threads_y = Base.min(Nq, threads_y)
+    threads = (threads_x, threads_y) # e.g., (16, 32) or similar, max product is 1024
+
+    blocks_x = cld(2L, threads_x)
+    blocks_y = cld(Nq, threads_y)
+    blocks = (blocks_x, blocks_y)
+
     kernel(I_d, evalues_d; threads=threads, blocks=blocks)
     disp_d = view(evalues_d,L+1:2L, :)
 
