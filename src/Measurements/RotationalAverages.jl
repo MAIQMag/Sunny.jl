@@ -140,7 +140,7 @@ function powder_average(f, cryst, radii, n::Int; seed=0, batch_size=1)
     rng = Random.Xoshiro(seed)
     sphpts = sphere_points(n)
     to_rlu = inv(cryst.recipvecs)
-    Threads.@threads :static for (i, radius) in collect(enumerate(radii))
+    for (i, radius) in enumerate(radii)
         R = Mat3(random_orthogonal(rng, 3))
         res = f(Ref(to_rlu * R * radius) .* sphpts)
         if res isa Intensities
