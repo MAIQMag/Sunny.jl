@@ -18,3 +18,4 @@ end
 Sunny.num_observables(measure::MeasureSpecDevice) = size(measure.observables, 1)
 Sunny.num_correlations(measure::MeasureSpecDevice) = length(measure.corr_pairs) 
 
+Base.eltype(device::MeasureSpecDevice)  = only(Base.return_types(device.combiner, (Sunny.Vec3, CUDA.CuVector{ComplexF64})))

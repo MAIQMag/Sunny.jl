@@ -166,6 +166,5 @@ function intensities_bands(swt::SpinWaveTheoryDevice, qpts; kT=0, with_negative=
 
     disp_d = reshape(CuArray(disp_d), L, size(qpts.qs)...)
     intensity_d = reshape(intensity_d, L, size(qpts.qs)...)
-    BandIntensitiesDevice = Base.get_extension(Sunny, :CUDAExt).BandIntensitiesDevice
     return BandIntensitiesDevice(cryst, qpts, disp_d, intensity_d)
 end

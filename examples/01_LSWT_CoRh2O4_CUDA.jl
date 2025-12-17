@@ -153,7 +153,7 @@ energies = range(0, 6, 300)
 swt_d = to_device(swt)
 @time res_d = intensities(swt_d, path_d; energies, kernel)
 @time res_d = intensities(swt_d, path_d; energies, kernel)
-res = Sunny.Intensities(res_d)
+res = Sunny.Intensities(res_d, cryst)
 plot_intensities(res; units, title="CoRh₂O₄ LSWT")
 
 # Sometimes experimental data is only available as a powder average, i.e., as an
@@ -168,7 +168,7 @@ radii = range(0, 3, 200) # (1/Å)
 res_d = powder_average(cryst, radii, 200) do qs
     intensities(swt_d, qs; energies, kernel)
 end
-res = Sunny.PowderIntensities(res_d)
+res = Sunny.PowderIntensities(res_d, cryst)
 plot_intensities(res; units, saturation=1.0, title="CoRh₂O₄ Powder Average")
 
 # This result can be compared to experimental neutron scattering data
