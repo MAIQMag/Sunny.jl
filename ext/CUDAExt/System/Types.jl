@@ -58,6 +58,8 @@ struct SystemDevice{TCrystal, TArrField, TArrInt, TPairs, TArrGs, TDipole}
 end
 
 function SystemDevice(host::Sunny.System)
+    @assert host.mode in (:dipole, :dipole_uncorrected)
+    @assert isnothing(host.ewald)
     original_crystal = CrystalDevice(Sunny.orig_crystal(host))
     crystal = CrystalDevice(host.crystal)
     dims = host.dims

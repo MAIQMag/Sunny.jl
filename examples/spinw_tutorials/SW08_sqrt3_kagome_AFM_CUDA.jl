@@ -9,7 +9,7 @@
 
 using CUDA
 #CUDA.set_runtime_version!(v"12.9"; local_toolkit=true)
-using Sunny #, GLMakie
+using Sunny, GLMakie
 
 # Define the chemical cell of a kagome lattice with spacegroup 147 (P-3).
 
@@ -78,4 +78,4 @@ for i in 1:3
     end
 end
 res = Sunny.PowderIntensities(res_d, cryst)
-#plot_intensities(res; units, colorrange=(0, 20))
+plot_intensities(res; units, colorrange=(0, 20))
