@@ -24,13 +24,26 @@ function _broaden(data, bands_data, disp, energies, kernel)
     if iq > size(disp, 2)
         return
     end
+
+    bands_buf = CuDynamicSharedArray(Float64, (size(bands_data, 1), blockDim().x))
+    bands_bufq = view(bands_buf, :, threadIdx().x)
+    for k in 1:blockDim().y:size(bands_data, 1)
+        bands_bufq[k] = bands_data[k, iq]
+    end
+
+    disp_buf = CuDynamicSharedArray(Float64, (size(disp, 1), blockDim().x), size(bands_data, 1) * blockDim().x * sizeof(Float64))
+    disp_bufq = view(disp_buf, :, threadIdx().x)
+    for k in 1:blockDim().y:size(bands_data, 1)
+        disp_bufq[k] = disp[k, iq]
+    end
+
     ω = energies[iω]
     total = 0.
-    for (ib, b) in enumerate(view(disp, :, iq))
+    for ib in 1:length(disp_bufq)
         #norm(bands.data[ib, iq]) < cutoff && continue
-        total += kernel(b, ω) * bands_data[ib, iq]
+        total += kernel(disp[ib], ω) * bands_bufq[ib]
     end
-    data[iω, iq] = total 
+    data[iω, iq] = total
     return
 end
 
@@ -47,7 +60,8 @@ function broaden!(data::CuArray{Ret}, bands::BandIntensitiesDevice{Ret}; energie
 
     kernel_d = BroadeningDevice(kernel)
     gpu_kernel = CUDA.@cuda launch=false _broaden(data, bands.data, bands.disp, energies_d, kernel_d)
-    config = launch_configuration(gpu_kernel.fun)
+    get_shmem(threads; rows=size(bands.data,1)) = 2 * threads[1] * rows * sizeof(Float64)
+    config = launch_configuration(gpu_kernel.fun, shmem=threads->get_shmem(threads))
     optimal_threads_1d = config.threads
     
     threads_x = Base.min(nω, optimal_threads_1d)
@@ -60,7 +74,7 @@ function broaden!(data::CuArray{Ret}, bands::BandIntensitiesDevice{Ret}; energie
     blocks_x = cld(nω, threads_x)
     blocks_y = cld(nq, threads_y)
     blocks = (blocks_x, blocks_y)
-    gpu_kernel(data, bands.data, bands.disp, energies_d, kernel_d; threads=threads, blocks=blocks)
+    gpu_kernel(data, bands.data, bands.disp, energies_d, kernel_d; threads=threads, blocks=blocks, shmem=get_shmem(threads))
 
     return data
 end
