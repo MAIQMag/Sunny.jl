@@ -36,7 +36,7 @@ function _broaden(data, bands_data, disp, energies, kernel)
     for k in 1:blockDim().y:size(bands_data, 1)
         disp_bufq[k] = disp[k, iq]
     end
-
+    CUDA.sync_threads()
     ω = energies[iω]
     total = 0.
     for ib in 1:length(disp_bufq)
