@@ -44,7 +44,7 @@ function _broaden(data, bands_data, disp, energies, kernel)
 
     ω = energies[iω]
     total = 0.
-    for ib in 1:length(disp_bufq)
+    for ib in eachindex(disp_bufq)
         total += kernel(disp_bufq[ib], ω) * bands_bufq[ib]
     end
     data[iω, iq] = total
