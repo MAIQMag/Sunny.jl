@@ -28,7 +28,7 @@ function _broaden(data, bands_data, disp, energies, kernel)
     bands_buf = CuDynamicSharedArray(Float64, (size(bands_data, 1), blockDim().y))
     bands_bufq = view(bands_buf, :, threadIdx().y)
     k = threadIdx().x
-    while k < size(bands_data, 1)
+    while k <= size(bands_data, 1)
         bands_bufq[k] = bands_data[k, iq]
         k += blockDim().x
     end
@@ -36,18 +36,19 @@ function _broaden(data, bands_data, disp, energies, kernel)
     disp_buf = CuDynamicSharedArray(Float64, (size(disp, 1), blockDim().y), size(bands_data, 1) * blockDim().y* sizeof(Float64))
     disp_bufq = view(disp_buf, :, threadIdx().y)
     k = threadIdx().x
-    while k < size(disp, 1)
+    while k <= size(disp, 1)
         disp_bufq[k] = disp[k, iq]
-	k += blockDim().x
+        k += blockDim().x
     end
     CUDA.sync_threads()
+
     ω = energies[iω]
     total = 0.
     for ib in 1:length(disp_bufq)
-        #norm(bands.data[ib, iq]) < cutoff && continue
-        total += kernel(disp[ib], ω) * bands_bufq[ib]
+        total += kernel(disp_bufq[ib], ω) * bands_bufq[ib]
     end
     data[iω, iq] = total
+
     return
 end
 
