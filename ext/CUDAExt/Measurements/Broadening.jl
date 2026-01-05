@@ -65,22 +65,27 @@ function broaden!(data::CuArray{Ret}, bands::BandIntensitiesDevice{Ret}; energie
 
     kernel_d = BroadeningDevice(kernel)
     gpu_kernel = CUDA.@cuda launch=false _broaden(data, bands.data, bands.disp, energies_d, kernel_d)
-    get_shmem(threads; rows=size(bands.data,1)) = length(threads) == 2 ? 2 * threads[2] * rows * sizeof(Float64) : 0
+
+    function get_shmem(threads; rows=size(bands.data,1))
+        if length(threads) == 2
+            return 2 * threads[2] * rows * sizeof(Float64)
+        else
+            return 2 * threads * rows * sizeof(Float64)
+        end
+    end
+
     config = launch_configuration(gpu_kernel.fun, shmem=threads->get_shmem(threads))
     optimal_threads_1d = config.threads
-    
+
     threads_x = Base.min(nω, optimal_threads_1d)
-
-    threads_y = optimal_threads_1d ÷ threads_x
-    threads_y = Base.min(nq, threads_y)
-
+    threads_y = Base.min(nq, optimal_threads_1d ÷ threads_x)
     threads = (threads_x, threads_y) # e.g., (16, 32) or similar, max product is 1024
 
     blocks_x = cld(nω, threads_x)
     blocks_y = cld(nq, threads_y)
     blocks = (blocks_x, blocks_y)
-    gpu_kernel(data, bands.data, bands.disp, energies_d, kernel_d; threads=threads, blocks=blocks, shmem=get_shmem(threads))
 
+    gpu_kernel(data, bands.data, bands.disp, energies_d, kernel_d; threads=threads, blocks=blocks, shmem=get_shmem(threads))
     return data
 end
 
