@@ -91,7 +91,7 @@ Calculate spin wave excitation bands for a set of q-points in reciprocal space.
 This calculation is analogous to [`intensities`](@ref), but does not perform
 line broadening of the bands.
 """
-function intensities_bands(swt::SpinWaveTheoryDevice, qpts; kT=0, with_negative=false)
+function Sunny.intensities_bands(swt::SpinWaveTheoryDevice, qpts; kT=0, with_negative=false)
     (; sys, measure) = swt
     isempty(measure.observables) && error("No observables! Construct SpinWaveTheory with a `measure` argument.")
     with_negative && error("Option `with_negative=true` not yet supported.")

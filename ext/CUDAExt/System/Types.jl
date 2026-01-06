@@ -21,8 +21,6 @@ struct InteractionsDevice{TSExpansion, TPair}
     pair    :: TPair
 end
 
-InteractionsDevice(host::Sunny.Interactions, pair_idx) = InteractionsDevice(host.onsite, pair_idx)
-
 function Adapt.adapt_structure(to, inter::InteractionsDevice)
     onsite = Adapt.adapt_structure(to, inter.onsite)
     pair = Adapt.adapt_structure(to, inter.pair)
@@ -58,7 +56,7 @@ struct SystemDevice{TCrystal, TArrField, TArrInt, TPairs, TArrGs, TDipole}
 end
 
 function SystemDevice(host::Sunny.System)
-    @assert host.mode in (:dipole, :dipole_uncorrected)
+    #@assert host.mode in (:dipole, :dipole_uncorrected)
     @assert isnothing(host.ewald)
     original_crystal = CrystalDevice(Sunny.orig_crystal(host))
     crystal = CrystalDevice(host.crystal)
@@ -66,21 +64,43 @@ function SystemDevice(host::Sunny.System)
     extfield = CUDA.CuArray(host.extfield)
     gs = CUDA.CuArray(host.gs)
     dipoles = CUDA.CuArray(host.dipoles)
-    pairs_h = PairCouplingDevice[]
-    interactions_h = InteractionsDevice{Sunny.StevensExpansion, Pair{Int64, Int64}}[]
 
-    for int in host.interactions_union
-        first = length(pairs_h) + 1
-        last = length(pairs_h) + length(int.pair)
-        for pair in int.pair
-            push!(pairs_h, PairCouplingDevice(pair))
+    if isa(host.interactions_union[begin].onsite, Sunny.StevensExpansion)
+        pairs_h = PairCouplingDevice[]
+        interactions_h = InteractionsDevice{Sunny.StevensExpansion, Pair{Int64, Int64}}[]
+
+        for int in host.interactions_union
+            first = length(pairs_h) + 1
+            last = length(pairs_h) + length(int.pair)
+            for pair in int.pair
+                push!(pairs_h, PairCouplingDevice(pair))
+            end
+            a = InteractionsDevice(int.onsite, Pair(first, last))
+            push!(interactions_h, a)
         end
-        a = InteractionsDevice(int, Pair(first, last))
-        push!(interactions_h, a)
+        pairs_d = CuVector(pairs_h)
+        interactions_d = CuVector(interactions_h)
+        return SystemDevice(original_crystal, crystal, dims, extfield, interactions_d, pairs_d, gs, dipoles)
+    else
+        pairs_h = PairCouplingDevice[]
+        N = size(host.interactions_union[begin].onsite, 1)
+        onsite_h = Array{ComplexF64}(undef, N, N, length(host.interactions_union))
+        interactions_h = InteractionsDevice{Int64, Pair{Int64, Int64}}[]
+        for (i, int) in enumerate(host.interactions_union)
+            first = length(pairs_h) + 1
+            last = length(pairs_h) + length(int.pair)
+            for pair in int.pair
+                push!(pairs_h, PairCouplingDevice(pair))
+            end
+            view(onsite_h, :, :, i) .= int.onsite
+            a = InteractionsDevice(i, Pair(first, last))
+            push!(interactions_h, a)
+        end
+        pairs_d = CuVector(pairs_h)
+        onsite_d = CuArray(onsite_h)
+        interactions_d = CuVector(interactions_h)
+        return SystemDevice(original_crystal, crystal, dims, extfield, interactions_d, pairs_d, gs, dipoles)
     end
-    pairs_d = CuVector(pairs_h)
-    interactions_d = CuVector(interactions_h)
-    return SystemDevice(original_crystal, crystal, dims, extfield, interactions_d, pairs_d, gs, dipoles)
 end
 
 function Adapt.adapt_structure(to, sys::SystemDevice)

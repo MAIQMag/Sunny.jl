@@ -5,7 +5,21 @@ struct MeasureSpecDevice{D, E, F, G}
     formfactors :: G  # (nobs × natoms)
 end
 
-MeasureSpecDevice(host::Sunny.MeasureSpec) = MeasureSpecDevice(CUDA.CuArray(host.observables), CUDA.CuVector(host.corr_pairs), host.combiner, CUDA.CuArray(host.formfactors)) 
+function MeasureSpecDevice(host::Sunny.MeasureSpec)
+    if isa(host.observables[begin],Sunny.Vec3)
+        return MeasureSpecDevice(CUDA.CuArray(host.observables), CUDA.CuVector(host.corr_pairs), host.combiner, CUDA.CuArray(host.formfactors)) 
+    else
+        a,b,c,d,e = size(host.observables)
+        f,g = size(host.observables[begin])
+        observables_h = Array{ComplexF64}(undef, f, g, a, b, c, d, e)
+        for (ind, val) in pairs(host.observables)
+            view(observables_h, :, :, ind) .= val
+            #println(ind, val)
+        end
+
+        return MeasureSpecDevice(CUDA.CuArray(observables_h), CUDA.CuVector(host.corr_pairs), host.combiner, CUDA.CuArray(host.formfactors)) 
+    end
+end
 
 function Adapt.adapt_structure(to, data::MeasureSpecDevice)
     observables = Adapt.adapt_structure(to, data.observables)

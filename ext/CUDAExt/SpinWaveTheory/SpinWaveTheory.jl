@@ -15,13 +15,36 @@ function Adapt.adapt_structure(to, data::SWTDataDipoleDevice)
     SWTDataDipoleDevice(local_rotations, observables_localized, stevens_coefs, sqrtS)
 end
 
-struct SWTDataSUNDevice
-    local_unitaries       :: AbstractVector{AbstractMatrix{ComplexF64}} # Transformations from global to quantization frame
-    observables_localized :: AbstractArray{HermitianC64Device, 2}      # Observables rotated to local frame (nobs × nsites)
-    spins_localized       :: AbstractArray{HermitianC64Device, 2}      # Spins rotated to local frame (3 × nsites)
+struct SWTDataSUNDevice{TVecRot, TArrObs, TVecS}
+    local_unitaries       :: TVecRot # Transformations from global to quantization frame
+    observables_localized :: TArrObs # Observables rotated to local frame (nobs × nsites)
+    spins_localized       :: TVecS   # Spins rotated to local frame (3 × nsites)
 end
 
-SWTDataSUNDevice(host::Sunny.SWTDataSUN) = SWTDataSUNDevice(CUDA.CuVector(host.local_unitaries), CUDA.CuArray(host.observables_localized), CUDA.CuArray(host.spins_localized))
+function SWTDataSUNDevice(host::Sunny.SWTDataSUN)
+    N = size(host.local_unitaries[begin], 1)
+    unitaries_h = Array{ComplexF64}(undef, N, N, length(host.local_unitaries))
+    for (i, unitary) in enumerate(host.local_unitaries)
+        view(unitaries_h, :, :, i) .= unitary
+    end
+    unitaries_d = CuArray(unitaries_h)
+
+    N = size(host.observables_localized[begin], 1)
+    observables_h = Array{ComplexF64}(undef, N, N, length(host.observables_localized))
+    for (i, observable) in enumerate(host.observables_localized)
+        view(observables_h, :, :, i) .= observable
+    end
+    observables_d = CuArray(unitaries_h)
+
+    N = size(host.spins_localized[begin], 1)
+    spins_h = Array{ComplexF64}(undef, N, N, length(host.spins_localized))
+    for (i, spin) in enumerate(host.spins_localized)
+        view(spins_h, :, :, i) .= spin
+    end
+    spins_d = CuArray(spins_h)
+
+    return SWTDataSUNDevice(unitaries_d, observables_d, spins_d)
+end
 
 function Adapt.adapt_structure(to, data::SWTDataSUNDevice)
     local_unitaries = Adapt.adapt_structure(to, data.local_unitaries)
@@ -38,7 +61,11 @@ struct SpinWaveTheoryDevice{TSys, TData, TMeasure} <: Sunny.AbstractSpinWaveTheo
 end
 
 function SpinWaveTheoryDevice(host::SpinWaveTheory)
-    return SpinWaveTheoryDevice(SystemDevice(host.sys), SWTDataDipoleDevice(host.data), MeasureSpecDevice(host.measure), host.regularization)
+    if isa(host.data, Sunny.SWTDataDipole)
+        return SpinWaveTheoryDevice(SystemDevice(host.sys), SWTDataDipoleDevice(host.data), MeasureSpecDevice(host.measure), host.regularization)
+    else
+        return SpinWaveTheoryDevice(SystemDevice(host.sys), SWTDataSUNDevice(host.data), MeasureSpecDevice(host.measure), host.regularization)
+    end
 end
 
 function Adapt.adapt_structure(to, swt::SpinWaveTheoryDevice)
