@@ -6,7 +6,7 @@ struct MeasureSpecDevice{D, E, F, G}
 end
 
 function MeasureSpecDevice(host::Sunny.MeasureSpec)
-    if isa(host.observables[begin],Sunny.Vec3)
+    if isa(eltype(host.observables), Sunny.Vec3)
         return MeasureSpecDevice(CUDA.CuArray(host.observables), CUDA.CuVector(host.corr_pairs), host.combiner, CUDA.CuArray(host.formfactors)) 
     else
         a,b,c,d,e = size(host.observables)
