@@ -9,9 +9,9 @@ function MeasureSpecDevice(host::Sunny.MeasureSpec)
     if isa(eltype(host.observables), Sunny.Vec3)
         return MeasureSpecDevice(CUDA.CuArray(host.observables), CUDA.CuVector(host.corr_pairs), host.combiner, CUDA.CuArray(host.formfactors)) 
     else
-        a,b,c,d,e = size(host.observables)
-        f,g = size(host.observables[begin])
-        observables_h = Array{ComplexF64}(undef, f, g, a, b, c, d, e)
+        outer_size = size(host.observables)
+        inner_size = size(host.observables[begin])
+        observables_h = Array{ComplexF64}(undef, inner_size..., outer_size...)
         for (ind, val) in pairs(host.observables)
             view(observables_h, :, :, ind) .= val
             #println(ind, val)
