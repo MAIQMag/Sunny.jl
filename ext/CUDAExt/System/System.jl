@@ -4,13 +4,25 @@ function Sunny.global_position(sys::SystemDevice, site)
 end
 
 """
-    eachsite(sys::System)
+    eachsite(sys::SystemDevice)
 
 An iterator over all [`Site`](@ref)s in the system.
 """
 @inline eachsite(sys::SystemDevice) = CartesianIndices(size(sys.dipoles))
 
 """
-nsites(sys::System) = length(eachsite(sys))
+nsites(sys::SystemDevice) = length(eachsite(sys))
 """
 Sunny.nsites(sys::SystemDevice) = length(eachsite(sys))
+
+"""
+    eachsite(sys::SystemDeviceSUN)
+
+An iterator over all [`Site`](@ref)s in the system.
+"""
+@inline eachsite(sys::SystemDeviceSUN) = CartesianIndices(size(sys.dipoles))
+
+"""
+nsites(sys::SystemDeviceSUN) = length(eachsite(sys))
+"""
+Sunny.nsites(sys::SystemDeviceSUN) = length(eachsite(sys))

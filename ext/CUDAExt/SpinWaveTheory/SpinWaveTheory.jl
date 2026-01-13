@@ -64,7 +64,7 @@ function SpinWaveTheoryDevice(host::SpinWaveTheory)
     if isa(host.data, Sunny.SWTDataDipole)
         return SpinWaveTheoryDevice(SystemDevice(host.sys), SWTDataDipoleDevice(host.data), MeasureSpecDevice(host.measure), host.regularization)
     else
-        return SpinWaveTheoryDevice(SystemDevice(host.sys), SWTDataSUNDevice(host.data), MeasureSpecDevice(host.measure), host.regularization)
+        return SpinWaveTheoryDevice(SystemDeviceSUN(host.sys), SWTDataSUNDevice(host.data), MeasureSpecDevice(host.measure), host.regularization)
     end
 end
 
@@ -77,7 +77,8 @@ function Adapt.adapt_structure(to, swt::SpinWaveTheoryDevice)
 end
 
 function Sunny.nflavors(swt::SpinWaveTheoryDevice)
-    nflavors = 1
+    (; sys) = swt
+    nflavors = sys.mode == SUN ? sys.Ns[1]-1 : 1
 end
 
 function Sunny.nbands(swt::SpinWaveTheoryDevice)
@@ -90,5 +91,10 @@ function Sunny.to_device(swt::Sunny.SpinWaveTheory)
 end
 
 function Sunny.dynamical_matrix!(H::CUDA.CuArray{ComplexF64, 3}, swt::SpinWaveTheoryDevice, q_reshaped, qs)
-    swt_hamiltonian_dipole!(H, swt, q_reshaped, qs)
+    if swt.sys.mode == SUN
+        swt_hamiltonian_SUN!(H, swt, q_reshaped, qs)
+    else
+        @assert swt.sys.mode in (dipole, dipole_uncorrected)
+        swt_hamiltonian_dipole!(H, swt, q_reshaped, qs)
+    end
 end
