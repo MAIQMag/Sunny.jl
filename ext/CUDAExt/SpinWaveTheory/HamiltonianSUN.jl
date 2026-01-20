@@ -1,148 +1,134 @@
 # Set the dynamical quadratic Hamiltonian matrix in SU(N) mode. 
-function swt_hamiltonian_SUN!(H::Matrix{ComplexF64}, swt::SpinWaveTheory, q_reshaped::Vec3)
-    (; sys, data) = swt
-    (; spins_localized) = data
-    (; gs) = sys
 
-    N = sys.Ns[1]
-    Na = natoms(sys.crystal)
-    L = (N-1) * Na
+using LinearAlgebra
 
-    # Clear the Hamiltonian
-    @assert size(H) == (2L, 2L)
-    H .= 0
-    blockdims = (N-1, Na, N-1, Na)
-    H11 = reshape(view(H, 1:L, 1:L), blockdims)
-    H12 = reshape(view(H, 1:L, L+1:2L), blockdims)
-    H21 = reshape(view(H, L+1:2L, 1:L), blockdims)
-    H22 = reshape(view(H, L+1:2L, L+1:2L), blockdims)
+function __dot(a, b)
+    return a[1]*b[1] + a[2]*b[2] + a[3]*b[3]
+end
 
+function _δ(m, n)
+    if m == n
+        return 1.
+    else
+        return 0.
+    end
+end
+
+function fill_matrix(H11, H12, H21, H22, swt, qs_reshaped, qs)
+    iq = threadIdx().x + (blockIdx().x - Int32(1)) * blockDim().x
+    if iq > size(H11, 5)
+        return
+    end
+
+    (; sys) = swt
+    (; pairs, onsite, general) = sys
+    N = sys.Ns
+    q_reshaped = qs_reshaped * qs[iq]
     for (i, int) in enumerate(sys.interactions_union)
-
         # Onsite coupling, including Zeeman. Note that op has already been
         # transformed according to the local frame of sublattice i.
-        op = int.onsite
+        op = view(onsite,:,:,i)
         for m in 1:N-1
             for n in 1:N-1
-                c = op[m, n] - δ(m, n) * op[N, N]
-                H11[m, i, n, i] += c
-                H22[n, i, m, i] += c
+                c = op[m, n] - _δ(m, n) * op[N, N]
+                H11[m, i, n, i, iq] += c
+                H22[n, i, m, i, iq] += c
             end
         end
-
-        for coupling in int.pair
+        for idx in int.pair[1]:int.pair[2]
+            coupling = pairs[idx]
             (; isculled, bond) = coupling
             isculled && break
 
             @assert i == bond.i
             j = bond.j
 
-            phase = exp(2π*im * dot(q_reshaped, bond.n)) # Phase associated with periodic wrapping
+            phase = exp(2π*im * __dot(q_reshaped, bond.n)) # Phase associated with periodic wrapping
 
             # Set "general" pair interactions of the form Aᵢ⊗Bⱼ. Note that Aᵢ
             # and Bᵢ have already been transformed according to the local frames
             # of sublattice i and j, respectively.
-            for (Ai, Bj) in coupling.general.data 
+            for jdx in 1:size(general,4)
+                Ai = view(general,:,:,1,jdx,idx)
+                Bj = view(general,:,:,2,jdx,idx)
                 for m in 1:N-1, n in 1:N-1
-                    c = (Ai[m,n] - δ(m,n)*Ai[N,N]) * (Bj[N,N])
-                    H11[m, i, n, i] += c
-                    H22[n, i, m, i] += c
+                    c = (Ai[m,n] - _δ(m,n)*Ai[N,N]) * (Bj[N,N])
+                    H11[m, i, n, i, iq] += c
+                    H22[n, i, m, i, iq] += c
 
-                    c = Ai[N,N] * (Bj[m,n] - δ(m,n)*Bj[N,N])
-                    H11[m, j, n, j] += c
-                    H22[n, j, m, j] += c
+                    c = Ai[N,N] * (Bj[m,n] - _δ(m,n)*Bj[N,N])
+                    H11[m, j, n, j, iq] += c
+                    H22[n, j, m, j, iq] += c
 
                     c = Ai[m,N] * Bj[N,n]
-                    H11[m, i, n, j] += c * phase
-                    H22[n, j, m, i] += c * conj(phase)
+                    H11[m, i, n, j, iq] += c * phase
+                    H22[n, j, m, i, iq] += c * conj(phase)
 
                     c = Ai[N,m] * Bj[n,N]
-                    H11[n, j, m, i] += c * conj(phase)
-                    H22[m, i, n, j] += c * phase
+                    H11[n, j, m, i, iq] += c * conj(phase)
+                    H22[m, i, n, j, iq] += c * phase
 
                     c = Ai[m,N] * Bj[n,N]
-                    H12[m, i, n, j] += c * phase
-                    H12[n, j, m, i] += c * conj(phase)
-                    H21[n, j, m, i] += conj(c) * conj(phase)
-                    H21[m, i, n, j] += conj(c) * phase
+                    H12[m, i, n, j, iq] += c * phase
+                    H12[n, j, m, i, iq] += c * conj(phase)
+                    H21[n, j, m, i, iq] += conj(c) * conj(phase)
+                    H21[m, i, n, j, iq] += conj(c) * phase
                 end
             end
         end
     end
+    return
+end
 
-    if !isnothing(sys.ewald)
-        (; demag, μ0_μB², A) = sys.ewald
-        N = sys.Ns[1]
 
-        # Interaction matrix for wavevector (0,0,0). It could be recalculated as:
-        # precompute_dipole_ewald(sys.crystal, (1,1,1), demag) * μ0_μB²
-        A0 = reshape(A, Na, Na)
-
-        # Interaction matrix for wavevector q
-        Aq = precompute_dipole_ewald_at_wavevector(sys.crystal, (1,1,1), demag, q_reshaped) * μ0_μB²
-        Aq = reshape(Aq, Na, Na)
-
-        for i in 1:Na, j in 1:Na
-            # An ordered pair of magnetic moments contribute (μᵢ A μⱼ)/2 to the
-            # energy, where μ = - g S. A symmetric contribution will appear for
-            # the bond reversal (i, j) → (j, i).
-            J = gs[i]' * Aq[i, j] * gs[j] / 2
-            J0 = gs[i]' * A0[i, j] * gs[j] / 2
-
-            for α in 1:3, β in 1:3
-                Ai = spins_localized[α, i]
-                Bj = spins_localized[β, j]
-
-                for m in 1:N-1, n in 1:N-1
-                    c = (Ai[m,n] - δ(m,n)*Ai[N,N]) * (Bj[N,N])
-                    H11[m, i, n, i] += c * J0[α, β]
-                    H22[n, i, m, i] += c * J0[α, β]
-
-                    c = Ai[N,N] * (Bj[m,n] - δ(m,n)*Bj[N,N])
-                    H11[m, j, n, j] += c * J0[α, β]
-                    H22[n, j, m, j] += c * J0[α, β]
-
-                    c = Ai[m,N] * Bj[N,n]
-                    H11[m, i, n, j] += c * J[α, β]
-                    H22[n, j, m, i] += c * conj(J[α, β])
-
-                    c = Ai[N,m] * Bj[n,N]
-                    H11[n, j, m, i] += c * conj(J[α, β])
-                    H22[m, i, n, j] += c * J[α, β]
-
-                    c = Ai[m,N] * Bj[n,N]
-                    H12[m, i, n, j] += c * J[α, β]
-                    H12[n, j, m, i] += c * conj(J[α, β])
-                    H21[n, j, m, i] += conj(c) * conj(J[α, β])
-                    H21[m, i, n, j] += conj(c) * J[α, β]
-                end
-            end
-        end
+function matrix_cleanup(H, swt, L)
+    iq = threadIdx().x + (blockIdx().x - Int32(1)) * blockDim().x
+    if iq > size(H, 3)
+        return
     end
+
+    Hq = view(H,:,:,iq)
 
     # H must be hermitian up to round-off errors
-    @assert diffnorm2(H, H') < 1e-12
+    @assert Sunny.diffnorm2(Hq, Hq') < 1e-12
 
     # Make H exactly hermitian
-    hermitianpart!(H)
+    hermitianpart!(Hq)
 
     # Add small constant shift for positive-definiteness
     for i in 1:2L
-        H[i,i] += swt.regularization
+        Hq[i,i] += swt.regularization
     end
+    return
 end
 
-function swt_hamiltonian_dipole!(H::CUDA.CuArray{ComplexF64, 3}, swt::SpinWaveTheoryDevice, qs_reshaped, qs::CUDA.CuArray{Sunny.Vec3})
-    L = Sunny.nbands(swt)
+function swt_hamiltonian_SUN!(H::CUDA.CuArray{ComplexF64,3}, swt::SpinWaveTheoryDevice, qs_reshaped, qs::CUDA.CuArray{Sunny.Vec3})
+    (; sys) = swt
+    N = sys.Ns
+    Na = Sunny.natoms(sys.crystal)
+    L = (N - 1) * Na
+
     Nq = size(qs, 1)
     @assert size(H, 3) == Nq
-    @assert size(view(H,:,:,1)) == (2L, 2L)
+    @assert size(view(H, :, :, 1)) == (2L, 2L)
 
     H .= 0.0
+    blockdims = (N - 1, Na, N - 1, Na, Nq)
 
-    kernel = CUDA.@cuda launch=false fill_matrix(H, swt, qs_reshaped, qs, L)
+    H11 = reshape(view(H, 1:L, 1:L, :), blockdims)
+    H12 = reshape(view(H, 1:L, L+1:2L, :), blockdims)
+    H21 = reshape(view(H, L+1:2L, 1:L, :), blockdims)
+    H22 = reshape(view(H, L+1:2L, L+1:2L, :), blockdims)
+
+    kernel = CUDA.@cuda launch=false fill_matrix(H11, H12, H21, H22, swt, qs_reshaped, qs)
     config = launch_configuration(kernel.fun)
     threads = Base.min(Nq, config.threads)
     blocks = cld(Nq, threads)
-    kernel(H, swt, qs_reshaped, qs, L; threads=threads, blocks=blocks)
+    kernel(H11, H12, H21, H22, swt, qs_reshaped, qs; threads=threads, blocks=blocks)
+
+    kernel = CUDA.@cuda launch=false matrix_cleanup(H, swt, L)
+    config = launch_configuration(kernel.fun)
+    threads = Base.min(Nq, config.threads)
+    blocks = cld(Nq, threads)
+    kernel(H, swt, L; threads=threads, blocks=blocks)
 end

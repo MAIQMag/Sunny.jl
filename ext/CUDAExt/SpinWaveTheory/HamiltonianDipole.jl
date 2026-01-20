@@ -112,7 +112,7 @@ function fill_matrix(H, swt, qs_reshaped, qs, L)
 
     # Add small constant shift for positive-definiteness
     for i in 1:2L
-        H[i, i, iq] += swt.regularization
+        Hq[i, i] += swt.regularization
     end
     return
 end
