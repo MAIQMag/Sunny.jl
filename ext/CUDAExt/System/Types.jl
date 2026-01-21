@@ -174,7 +174,7 @@ function SystemDeviceSUN(host::Sunny.System)
             end
         end
         view(onsite_h, :, :, i) .= int.onsite
-        a = InteractionsDeviceSUN(i, Pair(first, last))
+        a = InteractionsDevice(i, Pair(first, last))
         push!(interactions_h, a)
     end
     pairs_d = CuVector(pairs_h)

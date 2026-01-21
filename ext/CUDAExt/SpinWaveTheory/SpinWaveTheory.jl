@@ -30,17 +30,22 @@ function SWTDataSUNDevice(host::Sunny.SWTDataSUN)
     unitaries_d = CuArray(unitaries_h)
 
     N = size(host.observables_localized[begin], 1)
-    observables_h = Array{ComplexF64}(undef, N, N, length(host.observables_localized))
-    for (i, observable) in enumerate(host.observables_localized)
-        view(observables_h, :, :, i) .= observable
+    asdf = size(host.observables_localized)
+    observables_h = Array{ComplexF64}(undef, N, N, asdf[1], asdf[2])
+    for j in 1:asdf[2]
+        for i in 1:asdf[1]
+            view(observables_h, :, :, i, j) .= host.observables_localized[i,j]
+        end
     end
-    observables_d = CuArray(unitaries_h)
+    observables_d = CuArray(observables_h)
+    #println(size(host.observables_localized),size(host.observables_localized[begin]))
+    #println(size(observables_d), size(observables_h))
 
     N = size(host.spins_localized[begin], 1)
-    spins_h = Array{ComplexF64}(undef, N, N, length(host.spins_localized))
-    for (i, spin) in enumerate(host.spins_localized)
-        view(spins_h, :, :, i) .= spin
-    end
+    spins_h = Array{ComplexF64}(undef, N, N, size(host.spins_localized)...)
+    #for (i, j) in CartesianIndices(host.spins_localized)
+    #    view(spins_h, :, :, i, j) .= host.spins_localized[i,j]
+    #end
     spins_d = CuArray(spins_h)
 
     return SWTDataSUNDevice(unitaries_d, observables_d, spins_d)
@@ -78,7 +83,7 @@ end
 
 function Sunny.nflavors(swt::SpinWaveTheoryDevice)
     (; sys) = swt
-    nflavors = sys.mode == SUN ? sys.Ns[1]-1 : 1
+    nflavors = sys.mode == SUN ? sys.Ns - 1 : 1
 end
 
 function Sunny.nbands(swt::SpinWaveTheoryDevice)

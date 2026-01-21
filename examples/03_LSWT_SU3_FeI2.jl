@@ -28,6 +28,7 @@
 
 # Load packages.
 using CUDA
+#CUDA.set_runtime_version!(v"13.1"; local_toolkit=true)
 using Sunny, GLMakie
 
 # Construct the chemical cell of FeI₂ by specifying the lattice vectors and the
@@ -209,10 +210,16 @@ swt = SpinWaveTheory(sys_min; measure=ssf_perp(sys_min))
 qs = [[0,0,0], [1,0,0], [0,1,0], [1/2,0,0], [0,1,0], [0,0,0]]
 path = q_space_path(cryst, qs, 500)
 
+#kernel = lorentzian(fwhm=0.3)
+#energies = range(0, 10, 300);  # 0 < ω < 10 (meV)
+
 path_d = to_device(path)
 swt_d = to_device(swt)
-res = intensities_bands(swt_d, path_d)
+res_d = intensities_bands(swt_d, path_d) #; energies, kernel)
+res = Sunny.BandIntensities(res_d, cryst)
 plot_intensities(res; units, ylims=(0, 10), title="Single Crystal Bands")
+
+res = intensities_bands(swt, path) #; energies, kernel)
 
 # To make direct comparison with inelastic neutron scattering (INS) data, we
 # must account for empirical broadening of the data. Model this using a
