@@ -43,12 +43,11 @@ function _intensities(swt, qs, L, Ncells, H, Nobs, Na, Ncorr, recipvecs, intensi
     end
     q = qs[iq]
     Hq = view(H,:,:,iq)
-    
     corrbuf = CuDynamicSharedArray(ComplexF64, (Ncorr, blockDim().x))
     corrbufq = view(corrbuf,:,threadIdx().x)
     Avec_pref = CuDynamicSharedArray(ComplexF64, (Nobs, Na, blockDim().x), (Ncorr + Nobs) * blockDim().x * sizeof(ComplexF64))
     Avec_prefq = view(Avec_pref,:,:,threadIdx().x)
-     
+
     (; sys, data, measure) = swt
     N = sys.Ns
     q_global = recipvecs * q
@@ -58,10 +57,9 @@ function _intensities(swt, qs, L, Ncells, H, Nobs, Na, Ncorr, recipvecs, intensi
         Avec_prefq[μ, i] = exp(- im * dot(q_global, r_global))
         Avec_prefq[μ, i] *= Sunny.compute_form_factor(ff, Sunny.norm2(q_global))
     end
-    
+
     Avec = CuDynamicSharedArray(ComplexF64, (Nobs, blockDim().x), Ncorr * blockDim().x * sizeof(ComplexF64))
     Avecq = view(Avec, :, threadIdx().x)
-    
     # Fill `intensity` array
     for band in 1:L
         for idx in eachindex(Avecq)
@@ -72,21 +70,14 @@ function _intensities(swt, qs, L, Ncells, H, Nobs, Na, Ncorr, recipvecs, intensi
             O = view(data.observables_localized, :, :, μ, i)
             for α in 1:N-1
                 idx = α + (i-1)*(N-1)
-                Avecq[μ] += Avec_prefq[μ, i] * (O[α, N] * t[idx+L] + O[N, α] * t[idx])
+                Avecq[μ] += Avec_prefq[μ, i] * (O[α, N] * t[idx + L] + O[N, α] * t[idx])
             end
-            # This is the Avec of the two transverse and one
-            # longitudinal directions in the local frame. (In the
-            # local frame, z is longitudinal, and we are computing
-            # the transverse part only, so the last entry is zero)
-            #displacement_local_frame = Sunny.SA[t[i + Na] + t[i], im * (t[i + Na] - t[i]), 0.0]
-            #Avecq[μ] += Avec_prefq[μ, i] * (data.sqrtS[i]/√2) * (O' * displacement_local_frame)[1]
         end
         for idx in eachindex(corrbufq)
             (μ, ν) = measure.corr_pairs[idx]
             corrbufq[idx] = Avecq[μ] * conj(Avecq[ν]) / Ncells
         end
-        
-        #CUDA.@cuprintln(iq,' ', band, ' ', real(corrbufq[1]),' ', imag(corrbufq[1]))
+
         intensity[band, iq] = Sunny.thermal_prefactor(disp[band, iq]; kT) * measure.combiner(q_global, corrbufq)
     end
     return

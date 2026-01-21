@@ -2,10 +2,6 @@
 
 using LinearAlgebra
 
-function __dot(a, b)
-    return a[1]*b[1] + a[2]*b[2] + a[3]*b[3]
-end
-
 function _δ(m, n)
     if m == n
         return 1.
@@ -43,7 +39,7 @@ function fill_matrix(H11, H12, H21, H22, swt, qs_reshaped, qs)
             @assert i == bond.i
             j = bond.j
 
-            phase = exp(2π*im * __dot(q_reshaped, bond.n)) # Phase associated with periodic wrapping
+            phase = exp(2π*im * _dot(q_reshaped, bond.n)) # Phase associated with periodic wrapping
 
             # Set "general" pair interactions of the form Aᵢ⊗Bⱼ. Note that Aᵢ
             # and Bᵢ have already been transformed according to the local frames
