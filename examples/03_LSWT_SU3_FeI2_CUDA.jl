@@ -27,7 +27,8 @@
 # includes a strong easy axis anisotropy, ``D > 0``.
 
 # Load packages.
-
+using CUDA
+#CUDA.set_runtime_version!(v"13.1"; local_toolkit=true)
 using Sunny, GLMakie
 
 # Construct the chemical cell of FeI₂ by specifying the lattice vectors and the
@@ -47,14 +48,14 @@ cryst = Crystal(latvecs, positions; types)
 # information for spacegroup 164.
 
 cryst = subcrystal(cryst, "Fe")
-view_crystal(cryst)
+#view_crystal(cryst)
 
 # ### Symmetry analysis
 #
 # The command [`print_symmetry_table`](@ref) provides a list of all the
 # symmetry-allowed interactions out to 8 Å.
 
-print_symmetry_table(cryst, 8.0)
+#print_symmetry_table(cryst, 8.0)
 
 # The allowed ``g``-tensor is expressed as a 3×3 matrix in the free coefficients
 # `A`, `B`, ... The allowed single-ion anisotropy is expressed as a linear
@@ -159,7 +160,7 @@ minimize_energy!(sys)
 # Despite successful convergence to a local energy minimum, defects in the spin
 # configuration are visually apparent.
 
-plot_spins(sys; color=[S[3] for S in sys.dipoles])
+#plot_spins(sys; color=[S[3] for S in sys.dipoles])
 
 # One could precisely quantify the Fourier-space static structure factor
 # ``\mathcal{S}(𝐪)`` of this spin configuration using
@@ -167,7 +168,7 @@ plot_spins(sys; color=[S[3] for S in sys.dipoles])
 # most convenient to use [`print_wrapped_intensities`](@ref), which effectively
 # averages ``\mathcal{S}(𝐪)`` over all Brillouin zones.
 
-print_wrapped_intensities(sys)
+#print_wrapped_intensities(sys)
 
 # The known zero-field energy-minimizing magnetic structure of FeI₂ is a two-up,
 # two-down order. It can be described as a generalized spiral with a single
@@ -191,7 +192,7 @@ suggest_magnetic_supercell([[0, -1/4, 1/4]])
 sys_min = reshape_supercell(sys, [1 0 0; 0 2 1; 0 -2 1])
 randomize_spins!(sys_min)
 minimize_energy!(sys_min);
-plot_spins(sys_min; color=[S[3] for S in sys_min.dipoles], ghost_radius=12)
+#plot_spins(sys_min; color=[S[3] for S in sys_min.dipoles], ghost_radius=12)
 
 # ### Spin wave theory
 #
@@ -208,8 +209,17 @@ swt = SpinWaveTheory(sys_min; measure=ssf_perp(sys_min))
 
 qs = [[0,0,0], [1,0,0], [0,1,0], [1/2,0,0], [0,1,0], [0,0,0]]
 path = q_space_path(cryst, qs, 500)
-res = intensities_bands(swt, path)
+
+#kernel = lorentzian(fwhm=0.3)
+#energies = range(0, 10, 300);  # 0 < ω < 10 (meV)
+
+path_d = to_device(path)
+swt_d = to_device(swt)
+res_d = intensities_bands(swt_d, path_d) #; energies, kernel)
+res = Sunny.BandIntensities(res_d, cryst)
 plot_intensities(res; units, ylims=(0, 10), title="Single Crystal Bands")
+
+res = intensities_bands(swt, path) #; energies, kernel)
 
 # To make direct comparison with inelastic neutron scattering (INS) data, we
 # must account for empirical broadening of the data. Model this using a

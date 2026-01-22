@@ -107,8 +107,6 @@ function Sunny.intensities_bands(swt::SpinWaveTheoryDevice, qpts; kT=0, with_neg
     (; sys, measure) = swt
     isempty(measure.observables) && error("No observables! Construct SpinWaveTheory with a `measure` argument.")
     with_negative && error("Option `with_negative=true` not yet supported.")
-    #@assert sys.mode in (:dipole, :dipole_uncorrected)
-    #@assert isnothing(sys.ewald)
 
     qpts = convert(Sunny.AbstractQPoints, qpts)
 
