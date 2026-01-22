@@ -102,8 +102,6 @@ function SystemDevice(host::Sunny.System)
 end
 
 function Adapt.adapt_structure(to, sys::SystemDevice)
-    @assert host.mode in (:dipole, :dipole_uncorrected)
-    @assert isnothing(host.ewald)
     original_crystal = Adapt.adapt_structure(to, sys.original_crystal)
     crystal = Adapt.adapt_structure(to, sys.crystal)
     dims = Adapt.adapt_structure(to, sys.dims)
