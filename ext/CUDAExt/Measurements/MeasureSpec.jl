@@ -6,7 +6,7 @@ struct MeasureSpecDevice{TObsArr, TCorrArr, F, TFormArr}
 end
 
 function MeasureSpecDevice(host::Sunny.MeasureSpec)
-    if eltype(measure.observables) == Sunny.Vec3
+    if eltype(host.observables) == Sunny.Vec3
         return MeasureSpecDevice(CUDA.CuArray(host.observables), CUDA.CuVector(host.corr_pairs), host.combiner, CUDA.CuArray(host.formfactors)) 
     else
         outer_size = size(host.observables)
