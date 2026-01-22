@@ -43,7 +43,7 @@ function fill_matrix(H, swt, qs_reshaped, qs, L)
             @assert i == bond.i
             j = bond.j
 
-            phase = exp(2π*im * _dot(q_reshaped, bond.n)) # Phase associated with periodic wrapping
+            phase = exp(2π*im * dot(q_reshaped, bond.n)) # Phase associated with periodic wrapping
 
             si = sqrtS[i]^2
             sj = sqrtS[j]^2

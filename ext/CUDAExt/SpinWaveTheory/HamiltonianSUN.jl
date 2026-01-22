@@ -1,14 +1,6 @@
 # Set the dynamical quadratic Hamiltonian matrix in SU(N) mode. 
 
-using LinearAlgebra
-
-function _δ(m, n)
-    if m == n
-        return 1.
-    else
-        return 0.
-    end
-end
+@inline δ(x, y) = (x==y)
 
 function fill_matrix(H11, H12, H21, H22, swt, qs_reshaped, qs)
     iq = threadIdx().x + (blockIdx().x - Int32(1)) * blockDim().x
@@ -26,7 +18,7 @@ function fill_matrix(H11, H12, H21, H22, swt, qs_reshaped, qs)
         op = view(onsite,:,:,i)
         for m in 1:N-1
             for n in 1:N-1
-                c = op[m, n] - _δ(m, n) * op[N, N]
+                c = op[m, n] - δ(m, n) * op[N, N]
                 H11[m, i, n, i, iq] += c
                 H22[n, i, m, i, iq] += c
             end
@@ -39,7 +31,7 @@ function fill_matrix(H11, H12, H21, H22, swt, qs_reshaped, qs)
             @assert i == bond.i
             j = bond.j
 
-            phase = exp(2π*im * _dot(q_reshaped, bond.n)) # Phase associated with periodic wrapping
+            phase = exp(2π*im * dot(q_reshaped, bond.n)) # Phase associated with periodic wrapping
 
             # Set "general" pair interactions of the form Aᵢ⊗Bⱼ. Note that Aᵢ
             # and Bᵢ have already been transformed according to the local frames
@@ -48,11 +40,11 @@ function fill_matrix(H11, H12, H21, H22, swt, qs_reshaped, qs)
                 Ai = view(general,:,:,1,jdx,idx)
                 Bj = view(general,:,:,2,jdx,idx)
                 for m in 1:N-1, n in 1:N-1
-                    c = (Ai[m,n] - _δ(m,n)*Ai[N,N]) * (Bj[N,N])
+                    c = (Ai[m,n] - δ(m,n)*Ai[N,N]) * (Bj[N,N])
                     H11[m, i, n, i, iq] += c
                     H22[n, i, m, i, iq] += c
 
-                    c = Ai[N,N] * (Bj[m,n] - _δ(m,n)*Bj[N,N])
+                    c = Ai[N,N] * (Bj[m,n] - δ(m,n)*Bj[N,N])
                     H11[m, j, n, j, iq] += c
                     H22[n, j, m, j, iq] += c
 
