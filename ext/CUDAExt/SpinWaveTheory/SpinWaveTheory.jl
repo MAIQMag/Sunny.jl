@@ -22,30 +22,31 @@ struct SWTDataSUNDevice{TVecRot, TArrObs, TVecS}
 end
 
 function SWTDataSUNDevice(host::Sunny.SWTDataSUN)
-    N = size(host.local_unitaries[begin], 1)
-    unitaries_h = Array{ComplexF64}(undef, N, N, length(host.local_unitaries))
+    inner_size = size(host.local_unitaries[begin])
+    unitaries_h = Array{ComplexF64}(undef, inner_size..., length(host.local_unitaries))
     for (i, unitary) in enumerate(host.local_unitaries)
         view(unitaries_h, :, :, i) .= unitary
     end
     unitaries_d = CuArray(unitaries_h)
 
-    N = size(host.observables_localized[begin], 1)
-    asdf = size(host.observables_localized)
-    observables_h = Array{ComplexF64}(undef, N, N, asdf[1], asdf[2])
-    for j in 1:asdf[2]
-        for i in 1:asdf[1]
+    inner_size = size(host.observables_localized[begin])
+    outer_size = size(host.observables_localized)
+    observables_h = Array{ComplexF64}(undef, inner_size..., outer_size...)
+    for j in 1:outer_size[2]
+        for i in 1:outer_size[1]
             view(observables_h, :, :, i, j) .= host.observables_localized[i,j]
         end
     end
     observables_d = CuArray(observables_h)
-    #println(size(host.observables_localized),size(host.observables_localized[begin]))
-    #println(size(observables_d), size(observables_h))
 
-    N = size(host.spins_localized[begin], 1)
-    spins_h = Array{ComplexF64}(undef, N, N, size(host.spins_localized)...)
-    #for (i, j) in CartesianIndices(host.spins_localized)
-    #    view(spins_h, :, :, i, j) .= host.spins_localized[i,j]
-    #end
+    inner_size = size(host.spins_localized[begin])
+    outer_size = size(host.spins_localized)
+    spins_h = Array{ComplexF64}(undef, inner_size..., outer_size...)
+    for j in 1:outer_size[2]
+        for i in 1:outer_size[1]
+            view(spins_h, :, :, i, j) .= host.spins_localized[i,j]
+        end
+    end
     spins_d = CuArray(spins_h)
 
     return SWTDataSUNDevice(unitaries_d, observables_d, spins_d)
