@@ -69,7 +69,7 @@ function fill_matrix(H11, H12, H21, H22, swt, qs_reshaped, qs)
 end
 
 
-function matrix_cleanup(H, swt, L)
+function matrix_cleanup1(H, swt, L)
     iq = threadIdx().x + (blockIdx().x - Int32(1)) * blockDim().x
     if iq > size(H, 3)
         return
@@ -114,7 +114,7 @@ function swt_hamiltonian_SUN!(H::CUDA.CuArray{ComplexF64,3}, swt::SpinWaveTheory
     blocks = cld(Nq, threads)
     kernel(H11, H12, H21, H22, swt, qs_reshaped, qs; threads=threads, blocks=blocks)
 
-    kernel = CUDA.@cuda launch=false matrix_cleanup(H, swt, L)
+    kernel = CUDA.@cuda launch=false matrix_cleanup1(H, swt, L)
     config = launch_configuration(kernel.fun)
     threads = Base.min(Nq, config.threads)
     blocks = cld(Nq, threads)
