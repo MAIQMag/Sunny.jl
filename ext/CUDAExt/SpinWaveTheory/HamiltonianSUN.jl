@@ -68,28 +68,6 @@ function fill_matrix(H11, H12, H21, H22, swt, qs_reshaped, qs)
     return
 end
 
-
-function matrix_cleanup1(H, swt, L)
-    iq = threadIdx().x + (blockIdx().x - Int32(1)) * blockDim().x
-    if iq > size(H, 3)
-        return
-    end
-
-    Hq = view(H,:,:,iq)
-
-    # H must be hermitian up to round-off errors
-    @assert Sunny.diffnorm2(Hq, Hq') < 1e-12
-
-    # Make H exactly hermitian
-    hermitianpart!(Hq)
-
-    # Add small constant shift for positive-definiteness
-    for i in 1:2L
-        Hq[i,i] += swt.regularization
-    end
-    return
-end
-
 function swt_hamiltonian_SUN!(H::CUDA.CuArray{ComplexF64,3}, swt::SpinWaveTheoryDevice, qs_reshaped, qs::CUDA.CuArray{Sunny.Vec3})
     (; sys) = swt
     N = sys.Ns
@@ -114,9 +92,25 @@ function swt_hamiltonian_SUN!(H::CUDA.CuArray{ComplexF64,3}, swt::SpinWaveTheory
     blocks = cld(Nq, threads)
     kernel(H11, H12, H21, H22, swt, qs_reshaped, qs; threads=threads, blocks=blocks)
 
-    kernel = CUDA.@cuda launch=false matrix_cleanup1(H, swt, L)
-    config = launch_configuration(kernel.fun)
-    threads = Base.min(Nq, config.threads)
-    blocks = cld(Nq, threads)
-    kernel(H, swt, L; threads=threads, blocks=blocks)
+    kernel = CUDA.@cuda launch=false matrix_cleanup(H, swt, L)
+
+    function get_shmem(threads)
+        if length(threads) == 2
+            return threads[1] * threads[2] * sizeof(Float64)
+        else
+            return threads * sizeof(Float64)
+        end
+    end
+
+    config = launch_configuration(kernel.fun, shmem=threads->get_shmem(threads))
+    optimal_threads_1d = config.threads
+    threads_x = Base.min(L, optimal_threads_1d)
+    threads_y = Base.min(Nq, optimal_threads_1d ÷ threads_x)
+    threads = (threads_x, threads_y)
+
+    blocks_x = cld(L, threads_x)
+    blocks_y = cld(Nq, threads_y)
+    blocks = (blocks_x, blocks_y)
+    kernel(H, swt, L; threads=threads, blocks=blocks, shmem=get_shmem(threads))
+
 end
