@@ -43,27 +43,28 @@ function matrix_cleanup(H, swt, L)
 
     Hq = view(H,:,:,iq)
 
-    # H must be hermitian up to round-off errors
-    diffnorm2(Hq, Hq', i, L, 1e-12)
+    @inbounds begin
+        # H must be hermitian up to round-off errors
+        diffnorm2(Hq, Hq', i, L, 1e-12)
 
-    # Make H exactly hermitian
-    for j in 1:i-1
-        Hq[i, j] = val = 0.5 * (Hq[i, j] + adjoint(Hq[j, i]))
-        Hq[j, i] = adjoint(val)
+        # Make H exactly hermitian
+        for j in 1:i-1
+            Hq[i, j] = val = 0.5 * (Hq[i, j] + adjoint(Hq[j, i]))
+            Hq[j, i] = adjoint(val)
+        end
+        Hq[i,i] = real(Hq[i,i])
+
+        ip = 2L - i + 1
+        for jp in 1:ip -i
+            Hq[ip, jp] = val = 0.5 * (Hq[ip, jp] + adjoint(Hq[jp, ip]))
+            Hq[jp, ip] = adjoint(val)
+        end
+        Hq[ip,ip] = real(Hq[ip,ip])
+
+        # Add small constant shift for positive-definiteness
+        Hq[i,i] += swt.regularization
+        Hq[i+L,i+L] += swt.regularization
     end
-    Hq[i,i] = real(Hq[i,i])
-
-    ip = 2L - i + 1
-    for jp in 1:ip -i
-        Hq[ip, jp] = val = 0.5 * (Hq[ip, jp] + adjoint(Hq[jp, ip]))
-        Hq[jp, ip] = adjoint(val)
-    end
-    Hq[ip,ip] = real(Hq[ip,ip])
-
-    # Add small constant shift for positive-definiteness
-    Hq[i,i] += swt.regularization
-    Hq[i+L,i+L] += swt.regularization
-
     return
 end
 
