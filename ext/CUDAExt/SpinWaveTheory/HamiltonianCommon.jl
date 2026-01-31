@@ -66,3 +66,11 @@ function matrix_cleanup(H, swt, L)
 
     return
 end
+
+function get_shmem_matrix_cleanup(threads)
+    if length(threads) == 2
+        return threads[1] * threads[2] * sizeof(Float64)
+    else
+        return threads * sizeof(Float64)
+    end
+end

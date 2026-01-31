@@ -12,55 +12,57 @@ function fill_matrix(H11, H12, H21, H22, swt, qs_reshaped, qs)
     (; pairs, onsite, general) = sys
     N = sys.Ns
     q_reshaped = qs_reshaped * qs[iq]
-    for (i, int) in enumerate(sys.interactions_union)
-        # Onsite coupling, including Zeeman. Note that op has already been
-        # transformed according to the local frame of sublattice i.
-        op = view(onsite,:,:,i)
-        for m in 1:N-1
-            for n in 1:N-1
-                c = op[m, n] - δ(m, n) * op[N, N]
-                H11[m, i, n, i, iq] += c
-                H22[n, i, m, i, iq] += c
-            end
-        end
-        for idx in int.pair[1]:int.pair[2]
-            coupling = pairs[idx]
-            (; isculled, bond) = coupling
-            isculled && break
-
-            @assert i == bond.i
-            j = bond.j
-
-            phase = exp(2π*im * dot(q_reshaped, bond.n)) # Phase associated with periodic wrapping
-
-            # Set "general" pair interactions of the form Aᵢ⊗Bⱼ. Note that Aᵢ
-            # and Bᵢ have already been transformed according to the local frames
-            # of sublattice i and j, respectively.
-            for jdx in 1:size(general,4)
-                Ai = view(general,:,:,1,jdx,idx)
-                Bj = view(general,:,:,2,jdx,idx)
-                for m in 1:N-1, n in 1:N-1
-                    c = (Ai[m,n] - δ(m,n)*Ai[N,N]) * (Bj[N,N])
+    @inbounds begin
+        for (i, int) in enumerate(sys.interactions_union)
+            # Onsite coupling, including Zeeman. Note that op has already been
+            # transformed according to the local frame of sublattice i.
+            op = view(onsite,:,:,i)
+            for m in 1:N-1
+                for n in 1:N-1
+                    c = op[m, n] - δ(m, n) * op[N, N]
                     H11[m, i, n, i, iq] += c
                     H22[n, i, m, i, iq] += c
+                end
+            end
+            for idx in int.pair[1]:int.pair[2]
+                coupling = pairs[idx]
+                (; isculled, bond) = coupling
+                isculled && break
 
-                    c = Ai[N,N] * (Bj[m,n] - δ(m,n)*Bj[N,N])
-                    H11[m, j, n, j, iq] += c
-                    H22[n, j, m, j, iq] += c
+                @assert i == bond.i
+                j = bond.j
 
-                    c = Ai[m,N] * Bj[N,n]
-                    H11[m, i, n, j, iq] += c * phase
-                    H22[n, j, m, i, iq] += c * conj(phase)
+                phase = exp(2π*im * dot(q_reshaped, bond.n)) # Phase associated with periodic wrapping
 
-                    c = Ai[N,m] * Bj[n,N]
-                    H11[n, j, m, i, iq] += c * conj(phase)
-                    H22[m, i, n, j, iq] += c * phase
+                # Set "general" pair interactions of the form Aᵢ⊗Bⱼ. Note that Aᵢ
+                # and Bᵢ have already been transformed according to the local frames
+                # of sublattice i and j, respectively.
+                for jdx in 1:size(general,4)
+                    Ai = view(general,:,:,1,jdx,idx)
+                    Bj = view(general,:,:,2,jdx,idx)
+                    for m in 1:N-1, n in 1:N-1
+                        c = (Ai[m,n] - δ(m,n)*Ai[N,N]) * (Bj[N,N])
+                        H11[m, i, n, i, iq] += c
+                        H22[n, i, m, i, iq] += c
 
-                    c = Ai[m,N] * Bj[n,N]
-                    H12[m, i, n, j, iq] += c * phase
-                    H12[n, j, m, i, iq] += c * conj(phase)
-                    H21[n, j, m, i, iq] += conj(c) * conj(phase)
-                    H21[m, i, n, j, iq] += conj(c) * phase
+                        c = Ai[N,N] * (Bj[m,n] - δ(m,n)*Bj[N,N])
+                        H11[m, j, n, j, iq] += c
+                        H22[n, j, m, j, iq] += c
+
+                        c = Ai[m,N] * Bj[N,n]
+                        H11[m, i, n, j, iq] += c * phase
+                        H22[n, j, m, i, iq] += c * conj(phase)
+
+                        c = Ai[N,m] * Bj[n,N]
+                        H11[n, j, m, i, iq] += c * conj(phase)
+                        H22[m, i, n, j, iq] += c * phase
+
+                        c = Ai[m,N] * Bj[n,N]
+                        H12[m, i, n, j, iq] += c * phase
+                        H12[n, j, m, i, iq] += c * conj(phase)
+                        H21[n, j, m, i, iq] += conj(c) * conj(phase)
+                        H21[m, i, n, j, iq] += conj(c) * phase
+                    end
                 end
             end
         end
@@ -94,15 +96,7 @@ function swt_hamiltonian_SUN!(H::CUDA.CuArray{ComplexF64,3}, swt::SpinWaveTheory
 
     kernel = CUDA.@cuda launch=false matrix_cleanup(H, swt, L)
 
-    function get_shmem(threads)
-        if length(threads) == 2
-            return threads[1] * threads[2] * sizeof(Float64)
-        else
-            return threads * sizeof(Float64)
-        end
-    end
-
-    config = launch_configuration(kernel.fun, shmem=threads->get_shmem(threads))
+    config = launch_configuration(kernel.fun, shmem=threads->get_shmem_matrix_cleanup(threads))
     optimal_threads_1d = config.threads
     threads_x = Base.min(L, optimal_threads_1d)
     threads_y = Base.min(Nq, optimal_threads_1d ÷ threads_x)
@@ -111,6 +105,5 @@ function swt_hamiltonian_SUN!(H::CUDA.CuArray{ComplexF64,3}, swt::SpinWaveTheory
     blocks_x = cld(L, threads_x)
     blocks_y = cld(Nq, threads_y)
     blocks = (blocks_x, blocks_y)
-    kernel(H, swt, L; threads=threads, blocks=blocks, shmem=get_shmem(threads))
-
+    kernel(H, swt, L; threads=threads, blocks=blocks, shmem=get_shmem_matrix_cleanup(threads))
 end
