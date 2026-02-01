@@ -20,21 +20,26 @@ function fill_matrix(H, swt, qs_reshaped, qs, L)
 
     @inbounds begin
         for (i, int) in enumerate(sys.interactions_union)
+            H11_ii = ComplexF64(0.)
+            H22_ii = ComplexF64(0.)
+            H12_ii = ComplexF64(0.)
+            H21_ii = ComplexF64(0.)
+
             # Zeeman term
             B = gs[1, 1, 1, i]' * extfield[1, 1, 1, i]
             B′ = - dot(B, local_rotations[i][:, 3])
-            H11[i, i] += B′
-            H22[i, i] += B′
+            H11_ii += B′
+            H22_ii += B′
 
             # Single-ion anisotropy
             (; c2, c4, c6) = stevens_coefs[i]
             s = sqrtS[i]^2
             A1 = -6s*c2[3] - 80*s^3*c4[5] - 336*s^5*c6[7]
             A2 = 2s*(c2[1]+im*c2[5]) + 12s^3*(c4[3]+im*c4[7]) + 32s^5*(c6[5]+im*c6[9])
-            H11[i, i] += A1
-            H22[i, i] += A1
-            H12[i, i] += A2
-            H21[i, i] += conj(A2)
+            H11_ii += A1
+            H22_ii += A1
+            H12_ii += A2
+            H21_ii += conj(A2)
         
             # Pair interactions
             for idx in indices[i]:indices[i+1] - 1
@@ -65,9 +70,9 @@ function fill_matrix(H, swt, qs_reshaped, qs, L)
                     H12[i, j] += conj(P) * phase
                     H12[j, i] += conj(P) * conj(phase)
 
-                    H11[i, i] -= sj * J[3, 3]
+                    H11_ii -= sj * J[3, 3]
                     H11[j, j] -= si * J[3, 3]
-                    H22[i, i] -= sj * J[3, 3]
+                    H22_ii -= sj * J[3, 3]
                     H22[j, j] -= si * J[3, 3]
                 end
 
@@ -77,12 +82,12 @@ function fill_matrix(H, swt, qs_reshaped, qs, L)
 
                     Sj2Si = sj^2 * si
                     Si2Sj = si^2 * sj
-                    H11[i, i] += -12 * Sj2Si * K[3, 3]
-                    H22[i, i] += -12 * Sj2Si * K[3, 3]
+                    H11_ii += -12 * Sj2Si * K[3, 3]
+                    H22_ii += -12 * Sj2Si * K[3, 3]
                     H11[j, j] += -12 * Si2Sj * K[3, 3]
                     H22[j, j] += -12 * Si2Sj * K[3, 3]
-                    H21[i, i] += 4 * Sj2Si * (K[1, 3] - im*K[5, 3])
-                    H12[i, i] += 4 * Sj2Si * (K[1, 3] + im*K[5, 3])
+                    H21_ii += 4 * Sj2Si * (K[1, 3] - im*K[5, 3])
+                    H12_ii += 4 * Sj2Si * (K[1, 3] + im*K[5, 3])
                     H21[j, j] += 4 * Si2Sj * (K[3, 1] - im*K[3, 5])
                     H12[j, j] += 4 * Si2Sj * (K[3, 1] + im*K[3, 5])
 
@@ -99,6 +104,10 @@ function fill_matrix(H, swt, qs_reshaped, qs, L)
                     H12[i, j] += conj(P) * phase
                 end
             end
+            H11[i, i] += H11_ii
+            H22[i, i] += H22_ii
+            H12[i, i] += H12_ii
+            H21[i, i] += H21_ii
         end
     end
     return
