@@ -54,26 +54,37 @@ function fill_matrix(H, swt, qs_reshaped, qs, L)
                 si = sqrtS[i]^2
                 sj = sqrtS[j]^2
                 sij = sqrtS[i] * sqrtS[j]
+
+                H11_ij = ComplexF64(0.)
+                H11_ji = ComplexF64(0.)
+                H11_jj = ComplexF64(0.)
+                H22_ij = ComplexF64(0.)
+                H22_ji = ComplexF64(0.)
+                H22_jj = ComplexF64(0.)
+                H12_ij = ComplexF64(0.)
+                H12_ji = ComplexF64(0.)
+                H21_ij = ComplexF64(0.)
+                H21_ji = ComplexF64(0.)
                 # Bilinear exchange
                 if !iszero(coupling.bilin)
                     J = coupling.bilin  # Transformed exchange matrix
 
                     Q = 0.5 * sij * (J[1, 1] + J[2, 2] - im*(J[1, 2] - J[2, 1]))
-                    H11[i, j] += Q * phase
-                    H11[j, i] += conj(Q) * conj(phase)
-                    H22[i, j] += conj(Q) * phase
-                    H22[j, i] += Q  * conj(phase)
+                    H11_ij += Q * phase
+                    H11_ji += conj(Q) * conj(phase)
+                    H22_ij += conj(Q) * phase
+                    H22_ji += Q  * conj(phase)
 
                     P = 0.5 * sij * (J[1, 1] - J[2, 2] - im*(J[1, 2] + J[2, 1]))
-                    H21[i, j] += P * phase
-                    H21[j, i] += P * conj(phase)
-                    H12[i, j] += conj(P) * phase
-                    H12[j, i] += conj(P) * conj(phase)
+                    H21_ij += P * phase
+                    H21_ji += P * conj(phase)
+                    H12_ij += conj(P) * phase
+                    H12_ji += conj(P) * conj(phase)
 
                     H11_ii -= sj * J[3, 3]
-                    H11[j, j] -= si * J[3, 3]
+                    H11_jj -= si * J[3, 3]
                     H22_ii -= sj * J[3, 3]
-                    H22[j, j] -= si * J[3, 3]
+                    H22_jj -= si * J[3, 3]
                 end
 
                 # Biquadratic exchange
@@ -84,25 +95,35 @@ function fill_matrix(H, swt, qs_reshaped, qs, L)
                     Si2Sj = si^2 * sj
                     H11_ii += -12 * Sj2Si * K[3, 3]
                     H22_ii += -12 * Sj2Si * K[3, 3]
-                    H11[j, j] += -12 * Si2Sj * K[3, 3]
-                    H22[j, j] += -12 * Si2Sj * K[3, 3]
+                    H11_jj += -12 * Si2Sj * K[3, 3]
+                    H22_jj += -12 * Si2Sj * K[3, 3]
                     H21_ii += 4 * Sj2Si * (K[1, 3] - im*K[5, 3])
                     H12_ii += 4 * Sj2Si * (K[1, 3] + im*K[5, 3])
-                    H21[j, j] += 4 * Si2Sj * (K[3, 1] - im*K[3, 5])
-                    H12[j, j] += 4 * Si2Sj * (K[3, 1] + im*K[3, 5])
+                    H21_jj += 4 * Si2Sj * (K[3, 1] - im*K[3, 5])
+                    H12_jj += 4 * Si2Sj * (K[3, 1] + im*K[3, 5])
 
                     Q = 0.5 * sij^3 * ( K[4, 4]+K[2, 2] - im*(-K[4, 2]+K[2, 4]))
-                    H11[i, j] += Q * phase
-                    H11[j, i] += conj(Q * phase)
-                    H22[i, j] += conj(Q) * phase
-                    H22[j, i] += Q  * conj(phase)
+                    H11_ij += Q * phase
+                    H11_ji += conj(Q * phase)
+                    H22_ij += conj(Q) * phase
+                    H22_ji += Q  * conj(phase)
 
                     P = 0.5 * sij^3 * (-K[4, 4]+K[2, 2] - im*( K[4, 2]+K[2, 4]))
-                    H21[i, j] += P * phase
-                    H12[j, i] += conj(P * phase)
-                    H21[j, i] += P * conj(phase)
-                    H12[i, j] += conj(P) * phase
+                    H21_ij += P * phase
+                    H12_ji += conj(P * phase)
+                    H21_ji += P * conj(phase)
+                    H12_ij += conj(P) * phase
                 end
+                H11[i,j] += H11_ij
+                H11[j,i] += H11_ji
+                H11[j,j] += H11_jj
+                H22[i,j] += H22_ij
+                H22[j,i] += H22_ji
+                H22[j,j] += H22_jj
+                H12[i,j] += H12_ij
+                H12[j,i] += H12_ji
+                H21[i,j] += H21_ij
+                H21[j,i] += H21_ji
             end
             H11[i, i] += H11_ii
             H22[i, i] += H22_ii
