@@ -16,7 +16,7 @@ function fill_matrix(H, swt, qs_reshaped, qs, L)
 
     (; sys, data) = swt
     (; local_rotations, stevens_coefs, sqrtS) = data
-    (; extfield, pairs, gs) = sys
+    (; extfield, pairs, indices, gs) = sys
 
     @inbounds begin
         for (i, int) in enumerate(sys.interactions_union)
@@ -37,7 +37,7 @@ function fill_matrix(H, swt, qs_reshaped, qs, L)
             H21[i, i] += conj(A2)
         
             # Pair interactions
-            for idx in int.pair[1]:int.pair[2]
+            for idx in indices[i]:indices[i+1] - 1
                 coupling = pairs[idx]
                 (; isculled, bond) = coupling
                 isculled && break

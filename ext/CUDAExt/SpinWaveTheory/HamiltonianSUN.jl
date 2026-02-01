@@ -9,11 +9,11 @@ function fill_matrix(H11, H12, H21, H22, swt, qs_reshaped, qs)
     end
 
     (; sys) = swt
-    (; pairs, onsite, general) = sys
+    (; pairs, indices, onsite, general) = sys
     N = sys.Ns
     q_reshaped = qs_reshaped * qs[iq]
     @inbounds begin
-        for (i, int) in enumerate(sys.interactions_union)
+        for i in 1:length(indices) - 1 
             # Onsite coupling, including Zeeman. Note that op has already been
             # transformed according to the local frame of sublattice i.
             op = view(onsite,:,:,i)
@@ -24,7 +24,7 @@ function fill_matrix(H11, H12, H21, H22, swt, qs_reshaped, qs)
                     H22[n, i, m, i, iq] += c
                 end
             end
-            for idx in int.pair[1]:int.pair[2]
+            for idx in indices[i]:indices[i+1] - 1    
                 coupling = pairs[idx]
                 (; isculled, bond) = coupling
                 isculled && break
