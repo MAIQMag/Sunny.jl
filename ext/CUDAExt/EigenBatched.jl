@@ -2,7 +2,7 @@ using LinearAlgebra: BlasFloat, checksquare, BlasInt
 using LinearAlgebra.LAPACK: chkuplo, chkargsok
 
 using CUDA: unsafe_free!, @allowscalar, with_workspaces
-using CUDA.CUBLAS: StridedCuMatrix, unsafe_batch, handle, cublasZtrsmBatched_64, cublasCtrsmBatched_64
+using CUDA.CUBLAS: StridedCuMatrix, unsafe_strided_batch, handle, cublasZtrsmBatched_64, cublasCtrsmBatched_64
 using CUDA.CUSOLVER: dense_handle, CuSolverParameters, cusolverDnZpotrfBatched, cusolverDnCpotrfBatched, cusolverDnXsyevBatched_bufferSize, cusolverDnXsyevBatched
 ## (TR) triangular triangular matrix solution batched
 for (fname, elty) in ((:cublasZtrsmBatched_64, :ComplexF64),
@@ -13,27 +13,17 @@ for (fname, elty) in ((:cublasZtrsmBatched_64, :ComplexF64),
                                transa::Char,
                                diag::Char,
                                alpha,
-                               A::Vector{<:StridedCuMatrix{$elty}},
-                               B::Vector{<:StridedCuMatrix{$elty}})
+                               m,
+                               n,
+                               lda,
+                               ldb,
+                               A::CuArray{CuPtr{$elty}, 1},
+                               B::CuArray{CuPtr{$elty}, 1})
             if length(A) != length(B)
                 throw(DimensionMismatch(""))
             end
-            for (As,Bs) in zip(A,B)
-                mA, nA = size(As)
-                m,n = size(Bs)
-                if mA != nA throw(DimensionMismatch("A must be square")) end
-                if nA != (side == 'L' ? m : n) throw(DimensionMismatch("trsm_batched!")) end
-            end
 
-            m,n = size(B[1])
-            lda = max(1,stride(A[1],2))
-            ldb = max(1,stride(B[1],2))
-            Aptrs = unsafe_batch(A)
-            Bptrs = unsafe_batch(B)
-            $fname(handle(), side, uplo, transa, diag, m, n, alpha, Aptrs, lda, Bptrs, ldb, length(A))
-            unsafe_free!(Bptrs)
-            unsafe_free!(Aptrs)
-
+            $fname(handle(), side, uplo, transa, diag, m, n, alpha, A, lda, B, ldb, length(A))
             B
         end
     end
@@ -42,21 +32,17 @@ end
 for (fname, elty) in ((:cusolverDnCpotrfBatched, :ComplexF32),
                       (:cusolverDnZpotrfBatched, :ComplexF64))
     @eval begin
-        function potrfBatched!(uplo::Char, A::Vector{<:StridedCuMatrix{$elty}})
+        function potrfBatched!(uplo::Char, n, lda, A::CuArray{CuPtr{$elty}, 1})
 
             # Set up information for the solver arguments
             chkuplo(uplo)
-            n = checksquare(A[1])
-            lda = max(1, stride(A[1], 2))
             batchSize = length(A)
-
-            Aptrs = unsafe_batch(A)
 
             dh = dense_handle()
             resize!(dh.info, batchSize)
 
             # Run the solver
-            $fname(dh, uplo, n, Aptrs, lda, dh.info, batchSize)
+            $fname(dh, uplo, n, A, lda, dh.info, batchSize)
 
             # Copy the solver info and delete the device memory
             info = @allowscalar collect(dh.info)
@@ -118,4 +104,20 @@ function XsyevBatched!(jobz::Char, uplo::Char, A::StridedCuArray{T, 3}) where {T
     end
 end
 
-
+function eigenbatched!(H_d, I_d)
+    m = size(H_d, 1)
+    n = size(H_d, 2)
+    lda = max(1,stride(H_d, 2))
+    ldb = max(1,stride(I_d, 2))
+    H_dp = unsafe_strided_batch(H_d)
+    I_dp = unsafe_strided_batch(I_d)
+    potrfBatched!('L', n, lda, H_dp)
+    trsm_batched!('R', 'L', 'C', 'N', ComplexF64(1.), m, n, lda, ldb, H_dp, I_dp)
+    trsm_batched!('L', 'L', 'N', 'N', ComplexF64(1.), m, n, lda, ldb, H_dp, I_dp)
+    #evalues_d , _ = CUSOLVER.heevjBatched!('V', 'L', I_d)
+    evalues_d , _ = XsyevBatched!('V', 'L', I_d)
+    trsm_batched!('L', 'L', 'C', 'N', ComplexF64(1.), m, n, lda, ldb, H_dp, I_dp)
+    unsafe_free!(H_dp)
+    unsafe_free!(I_dp)
+    return evalues_d
+end
