@@ -1,8 +1,7 @@
-using LinearAlgebra: BlasFloat, checksquare, BlasInt
-using LinearAlgebra.LAPACK: chkuplo, chkargsok
+using LinearAlgebra: BlasFloat, checksquare
 
-using CUDA: unsafe_free!, @allowscalar, with_workspaces
-using CUDA.CUBLAS: StridedCuMatrix, unsafe_strided_batch, handle, cublasZtrsmBatched_64, cublasCtrsmBatched_64
+using CUDA: unsafe_free!, with_workspaces, findfirst
+using CUDA.CUBLAS: unsafe_strided_batch, handle, cublasZtrsmBatched_64, cublasCtrsmBatched_64
 using CUDA.CUSOLVER: dense_handle, CuSolverParameters, cusolverDnZpotrfBatched, cusolverDnCpotrfBatched, cusolverDnXsyevBatched_bufferSize, cusolverDnXsyevBatched
 ## (TR) triangular triangular matrix solution batched
 for (fname, elty) in ((:cublasZtrsmBatched_64, :ComplexF64),
@@ -13,18 +12,12 @@ for (fname, elty) in ((:cublasZtrsmBatched_64, :ComplexF64),
                                transa::Char,
                                diag::Char,
                                alpha,
-                               m,
                                n,
                                lda,
-                               ldb,
+                               batch_size,
                                A::CuArray{CuPtr{$elty}, 1},
                                B::CuArray{CuPtr{$elty}, 1})
-            if length(A) != length(B)
-                throw(DimensionMismatch(""))
-            end
-
-            $fname(handle(), side, uplo, transa, diag, m, n, alpha, A, lda, B, ldb, length(A))
-            B
+            $fname(handle(), side, uplo, transa, diag, n, n, alpha, A, lda, B, lda, batch_size)
         end
     end
 end
@@ -32,48 +25,24 @@ end
 for (fname, elty) in ((:cusolverDnCpotrfBatched, :ComplexF32),
                       (:cusolverDnZpotrfBatched, :ComplexF64))
     @eval begin
-        function potrfBatched!(uplo::Char, n, lda, A::CuArray{CuPtr{$elty}, 1})
-
-            # Set up information for the solver arguments
-            chkuplo(uplo)
-            batchSize = length(A)
-
-            dh = dense_handle()
-            resize!(dh.info, batchSize)
-
+        function potrfBatched!(dh, uplo::Char, n, lda, batch_size, A::CuArray{CuPtr{$elty}, 1})
             # Run the solver
-            $fname(dh, uplo, n, A, lda, dh.info, batchSize)
+            $fname(dh, uplo, n, A, lda, dh.info, batch_size)
 
-            # Copy the solver info and delete the device memory
-            info = @allowscalar collect(dh.info)
-
-            # Double check the solver's exit status
-            for i = 1:batchSize
-                chkargsok(BlasInt(info[i]))
-            end
-
-            # info[i] > 0 means the leading minor of order info[i] is not positive definite
-            # LinearAlgebra.LAPACK does not throw Exception here
-            # to simplify calls to isposdef! and factorize
-            return A, info
+            @assert isnothing(findfirst(!iszero, dh.info))
+            return A
         end
     end
 end
 
 # XsyevBatched
-function XsyevBatched!(jobz::Char, uplo::Char, A::StridedCuArray{T, 3}) where {T <: BlasFloat}
+function XsyevBatched!(dh, jobz::Char, uplo::Char, n, lda, batch_size, A::StridedCuArray{T, 3}) where {T <: BlasFloat}
     minimum_version = v"11.7.1"
     CUSOLVER.version() < minimum_version && throw(ErrorException("This operation requires cuSOLVER
         $(minimum_version) or later. Current cuSOLVER version: $(CUSOLVER.version())."))
-    chkuplo(uplo)
-    n = checksquare(A)
-    batch_size = size(A, 3)
     R = real(T)
-    lda = max(1, stride(A, 2))
     W = CuMatrix{R}(undef, n, batch_size)
     params = CuSolverParameters()
-    dh = dense_handle()
-    resize!(dh.info, batch_size)
 
     function bufferSize()
         out_cpu = Ref{Csize_t}(0)
@@ -84,6 +53,7 @@ function XsyevBatched!(jobz::Char, uplo::Char, A::StridedCuArray{T, 3}) where {T
         )
         return out_gpu[], out_cpu[]
     end
+
     with_workspaces(dh.workspace_gpu, dh.workspace_cpu, bufferSize()...) do buffer_gpu, buffer_cpu
         cusolverDnXsyevBatched(
             dh, params, jobz, uplo, n, T, A,
@@ -92,31 +62,30 @@ function XsyevBatched!(jobz::Char, uplo::Char, A::StridedCuArray{T, 3}) where {T
         )
     end
 
-    info = @allowscalar collect(dh.info)
-    for i in 1:batch_size
-        chkargsok(info[i] |> BlasInt)
-    end
+    @assert isnothing(findfirst(!iszero, dh.info))
 
-    if jobz == 'N'
-        return W
-    elseif jobz == 'V'
-        return W, A
-    end
+    return W
 end
 
 function eigenbatched!(H_d, I_d)
-    m = size(H_d, 1)
-    n = size(H_d, 2)
+    n = checksquare(H_d)
+    batch_size = size(H_d, 3)
+    @assert size(H_d) == size(I_d)
+
     lda = max(1,stride(H_d, 2))
-    ldb = max(1,stride(I_d, 2))
+    @assert max(1,stride(I_d, 2)) == lda
+
     H_dp = unsafe_strided_batch(H_d)
     I_dp = unsafe_strided_batch(I_d)
-    potrfBatched!('L', n, lda, H_dp)
-    trsm_batched!('R', 'L', 'C', 'N', ComplexF64(1.), m, n, lda, ldb, H_dp, I_dp)
-    trsm_batched!('L', 'L', 'N', 'N', ComplexF64(1.), m, n, lda, ldb, H_dp, I_dp)
-    #evalues_d , _ = CUSOLVER.heevjBatched!('V', 'L', I_d)
-    evalues_d , _ = XsyevBatched!('V', 'L', I_d)
-    trsm_batched!('L', 'L', 'C', 'N', ComplexF64(1.), m, n, lda, ldb, H_dp, I_dp)
+
+    dh = dense_handle()
+    resize!(dh.info, batch_size)
+
+    potrfBatched!(dh, 'L', n, lda, batch_size, H_dp)
+    trsm_batched!('R', 'L', 'C', 'N', ComplexF64(1.), n, lda, batch_size, H_dp, I_dp)
+    trsm_batched!('L', 'L', 'N', 'N', ComplexF64(1.), n, lda, batch_size, H_dp, I_dp)
+    evalues_d = XsyevBatched!(dh, 'V', 'L', n, lda, batch_size, I_d)
+    trsm_batched!('L', 'L', 'C', 'N', ComplexF64(1.), n, lda, batch_size, H_dp, I_dp)
     unsafe_free!(H_dp)
     unsafe_free!(I_dp)
     return evalues_d
