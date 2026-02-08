@@ -67,7 +67,7 @@ function XsyevBatched!(dh, jobz::Char, uplo::Char, n, lda, batch_size, A::Stride
     return W
 end
 
-function eigenbatched!(H_d, I_d)
+function hegvd_batched!(H_d, I_d)
     n = checksquare(H_d)
     batch_size = size(H_d, 3)
     @assert size(H_d) == size(I_d)

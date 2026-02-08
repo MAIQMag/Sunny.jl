@@ -150,7 +150,7 @@ function Sunny.intensities_bands(swt::SpinWaveTheoryDevice, qpts; kT=0, with_neg
 
     kernel(I_d; threads=threads, blocks=blocks)
 
-    evalues_d = eigenbatched!(H_d, I_d)
+    evalues_d = hegvd_batched!(H_d, I_d)
 
     kernel = @cuda launch=false _frequencies(I_d, evalues_d)
     config = launch_configuration(kernel.fun)
