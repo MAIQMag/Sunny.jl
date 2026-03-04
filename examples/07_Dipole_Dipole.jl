@@ -8,6 +8,7 @@
 # and Gingras, J. Phys.: Cond. Matter, **16**, 3339
 # (2004)](https://arxiv.org/abs/cond-mat/0403494).
 
+using CUDA
 using Sunny, GLMakie
 
 # Create a pyrochlore crystal from Wyckoff 16c for spacegroup 227.
@@ -16,7 +17,7 @@ units = Units(:K, :angstrom)
 latvecs = lattice_vectors(10.19, 10.19, 10.19, 90, 90, 90)
 positions = [[0, 0, 0]]
 cryst = Crystal(latvecs, positions, 227)
-view_crystal(cryst)
+#view_crystal(cryst)
 
 # Create a [`System`](@ref) with a random number `seed` that was empirically
 # selected to produce the desired type of spontaneous symmetry breaking. Reshape
@@ -46,7 +47,7 @@ modify_exchange_with_truncated_dipole_dipole!(sys_lr_cut, 5.0, units.vacuum_perm
 
 randomize_spins!(sys_lr)
 minimize_energy!(sys_lr)
-plot_spins(sys_lr; ghost_radius=8, color=[:red, :blue, :yellow, :purple])
+#plot_spins(sys_lr; ghost_radius=8, color=[:red, :blue, :yellow, :purple])
 
 # Copy this configuration to the other two systems. Note that the original `sys`
 # has a _continuum_ of degenerate ground states.
@@ -69,9 +70,14 @@ res1 = intensities_bands(swt, path)
 swt = SpinWaveTheory(sys_lr; measure)
 res2 = intensities_bands(swt, path)
 
+swt_d = to_device(swt)
+path_d = to_device(path)
+res2_d = intensities_bands(swt_d, path_d)
+res2 = Sunny.BandIntensities(res2_d, cryst)
+
 swt = SpinWaveTheory(sys_lr_cut; measure)
 res3 = intensities_bands(swt, path);
-
+ 
 # Create a panel corresponding to Fig. 2 of [Del Maestro and
 # Gingras](https://arxiv.org/abs/cond-mat/0403494). Dashed lines show the effect
 # of truncating dipole-dipole interactions at 5 Å. The Del Maestro and Gingras
