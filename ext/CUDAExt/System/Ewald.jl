@@ -5,12 +5,12 @@ using LinearAlgebra
 # Tensor product of 3-vectors
 (⊗)(a::Sunny.Vec3,b::Sunny.Vec3) = reshape(kron(a,b), 3, 3)
 
-function precompute_dipole_ewald(cryst::CrystalDevice, dims::NTuple{3,Int}, demag::Sunny.Mat3)
-    precompute_dipole_ewald_aux(cryst, dims, demag, Sunny.Vec3(0,0,0), cos, Val{Float64}())
+function precompute_dipole_ewald(A, cryst::CrystalDevice, dims::NTuple{3,Int}, demag::Sunny.Mat3)
+    precompute_dipole_ewald_aux(A, cryst, dims, demag, Sunny.Vec3(0,0,0), cos, Val{Float64}())
 end
 
-function precompute_dipole_ewald_at_wavevector(cryst::CrystalDevice, dims::NTuple{3,Int}, demag::Sunny.Mat3, q_reshaped::Sunny.Vec3)
-    precompute_dipole_ewald_aux(cryst, dims, demag, q_reshaped, cis, Val{ComplexF64}())
+function precompute_dipole_ewald_at_wavevector(A, cryst::CrystalDevice, dims::NTuple{3,Int}, demag::Sunny.Mat3, q_reshaped::Sunny.Vec3)
+    precompute_dipole_ewald_aux(A, cryst, dims, demag, q_reshaped, cis, Val{ComplexF64}())
 end
 
 # Precompute the pairwise interaction matrix A between magnetic moments μ. For
@@ -26,9 +26,9 @@ end
 # part cancels in the symmetric sum over ±k. Specifically, replace `cis(x) ≡
 # exp(i x) = cos(x) + i sin(x)` with just `cos(x)` for efficiency. The parameter
 # `T ∈ {Float64, ComplexF64}` controls the return type in a type-stable way.
-function precompute_dipole_ewald_aux(cryst::CrystalDevice, dims::NTuple{3,Int}, demag, q_reshaped, cis, ::Val{T}) where T
+function precompute_dipole_ewald_aux(A, cryst::CrystalDevice, dims::NTuple{3,Int}, demag, q_reshaped, cis, ::Val{T}) where T
     na = Sunny.natoms(cryst)
-    A = zeros(SMatrix{3, 3, T, 9}, dims..., na, na)
+    @assert size(A) == (dims..., na, na)
     positions = Vector(cryst.positions)
     # Superlattice vectors and reciprocals for the full system volume
     sys_size = diagm(Sunny.Vec3(dims))

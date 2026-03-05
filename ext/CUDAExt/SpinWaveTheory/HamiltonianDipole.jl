@@ -180,27 +180,27 @@ function swt_hamiltonian_ewald!(H::CUDA.CuArray{ComplexF64, 3}, swt::SpinWaveThe
 
     (; demag, μ0_μB², A) = swt.sys.ewald
     L = Sunny.nbands(swt)
+    na = Sunny.natoms(swt.sys.crystal)
     Nq = size(qs, 1)
     A0 = reshape(A, L, L)
 
     # Interaction matrix for wavevector q
-    A_qs = Array{Sunny.SMatrix{3,3,ComplexF64,9}}(undef, L, L, Nq)
+    A_qs = zeros(Sunny.SMatrix{3,3,ComplexF64,9}, 1, 1, 1, na, na, Nq)
     qs_h = Array(qs)
     for (i, q_h) in enumerate(qs_h)
         q_reshaped = qs_reshaped * q_h
-        Aq = precompute_dipole_ewald_at_wavevector(swt.sys.crystal, (1,1,1), demag, q_reshaped) * μ0_μB²
-        Aq = reshape(Aq, L, L)
-        view(A_qs,:,:,i) .= Aq
+        Aq = view(A_qs,:,:,:,:,:,i)
+        precompute_dipole_ewald_at_wavevector(Aq, swt.sys.crystal, (1,1,1), demag, q_reshaped)
+        Aq *= μ0_μB²
     end
-
-    A0_d = CUDA.CuArray(A0)
     A_qs_d = CUDA.CuArray(A_qs)
+    A_qs_reshape = reshape(A_qs_d, L, L, Nq)
 
-    kernel = CUDA.@cuda launch=false fill_matrix_ewald(H, A0_d, A_qs_d, swt, L)
+    kernel = CUDA.@cuda launch=false fill_matrix_ewald(H, A0, A_qs_reshape, swt, L)
     config = launch_configuration(kernel.fun)
     threads = Base.min(Nq, config.threads)
     blocks = cld(Nq, threads)
-    kernel(H, A0_d, A_qs_d, swt, L; threads=threads, blocks=blocks)
+    kernel(H, A0, A_qs_reshape, swt, L; threads=threads, blocks=blocks)
 end
 
 function swt_hamiltonian_dipole!(H::CUDA.CuArray{ComplexF64, 3}, swt::SpinWaveTheoryDevice, qs_reshaped, qs::CUDA.CuArray{Sunny.Vec3})
