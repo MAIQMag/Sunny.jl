@@ -116,5 +116,5 @@ function precompute_dipole_ewald_aux(A, cryst::CrystalDevice, dims::NTuple{3,Int
 
     # TODO: Verify that A[off, i, j] ≈ A[-off, j, i]'
 
-    return A
+    return
 end
