@@ -138,7 +138,7 @@ end
 # part cancels in the symmetric sum over ±k. Specifically, replace `cis(x) ≡
 # exp(i x) = cos(x) + i sin(x)` with just `cos(x)` for efficiency. The parameter
 # `T ∈ {Float64, ComplexF64}` controls the return type in a type-stable way.
-function precompute_dipole_ewald_at_wavevector_kernel(A, cryst, dims::NTuple{3,Int}, demag::Sunny.Mat3, qs_reshaped, qs)
+function precompute_dipole_ewald_at_wavevector_kernel(A, cryst, dims::NTuple{3,Int}, demag::Sunny.Mat3, qs_reshaped, qs, μ0_μB²)
     iq = threadIdx().x + (blockIdx().x - Int32(1)) * blockDim().x
     if iq > size(A, 6)
         return
@@ -228,7 +228,9 @@ function precompute_dipole_ewald_at_wavevector_kernel(A, cryst, dims::NTuple{3,I
         # For sites site1=(cell1, i) and site2=(cell2, j) offset by an amount
         # (off = cell2-cell1), the pair-energy is (s1 ⋅ A[off, i, j] ⋅ s2).
         # Julia arrays start at one, so we index A using (cell = off .+ 1).
-        A[cell, i, j] = acc
+        acc *= μ0_μB²
+
+        Aq[cell, i, j] = acc
     end
 
     # TODO: Verify that A[off, i, j] ≈ A[-off, j, i]'
