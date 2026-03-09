@@ -116,7 +116,7 @@ function Adapt.adapt_structure(to, sys::SystemDevice)
     SystemDevice(original_crystal, sys.mode, crystal, dims, extfield, interactions_union, pairs, indices, gs, ewald, dipoles)
 end
 
-struct SystemDeviceSUN{TCrystal, TArrField, TPairs, TIndices, TOnsite, TArrGs, TDipole, TGeneral}
+struct SystemDeviceSUN{TCrystal, TArrField, TPairs, TIndices, TOnsite, TArrGs, TEwald, TDipole, TGeneral}
     original_crystal   :: TCrystal
     mode               :: SystemMode
     crystal            :: TCrystal
@@ -126,7 +126,7 @@ struct SystemDeviceSUN{TCrystal, TArrField, TPairs, TIndices, TOnsite, TArrGs, T
     indices            :: TIndices
     onsite             :: TOnsite
     gs                 :: TArrGs # g-tensor per atom in unit cell
-    #ewald              :: Union{EwaldDevice, Nothing}
+    ewald              :: TEwald
     dipoles            :: TDipole # Expected dipoles
     Ns                 :: Int
     general            :: TGeneral
@@ -142,6 +142,7 @@ function SystemDeviceSUN(host::Sunny.System)
     dims = host.dims
     extfield = CUDA.CuArray(host.extfield)
     gs = CUDA.CuArray(host.gs)
+    ewald = EwaldDevice(host.ewald)
     dipoles = CUDA.CuArray(host.dipoles)
     Ns = host.Ns[1]
 
@@ -180,7 +181,7 @@ function SystemDeviceSUN(host::Sunny.System)
     indices_d = CuVector(indices_h)
     onsite_d = CuArray(onsite_h)
     general_d = CuArray(general_h)
-    return SystemDeviceSUN(original_crystal, SUN, crystal, dims, extfield, pairs_d, indices_d, onsite_d, gs, dipoles, Ns, general_d)
+    return SystemDeviceSUN(original_crystal, SUN, crystal, dims, extfield, pairs_d, indices_d, onsite_d, gs, ewald, dipoles, Ns, general_d)
 end
 
 function Adapt.adapt_structure(to, sys::SystemDeviceSUN)
@@ -192,8 +193,8 @@ function Adapt.adapt_structure(to, sys::SystemDeviceSUN)
     indices = Adapt.adapt_structure(to, sys.indices)
     onsite = Adapt.adapt_structure(to, sys.onsite)
     gs = Adapt.adapt_structure(to, sys.gs)
-    #ewald = Adapt.adapt_structure(to, sys.ewald)
+    ewald = Adapt.adapt_structure(to, sys.ewald)
     dipoles = Adapt.adapt_structure(to, sys.dipoles)
     general = Adapt.adapt_structure(to, sys.general)
-    SystemDeviceSUN(original_crystal, sys.mode, crystal, dims, extfield, pairs, indices, onsite, gs, dipoles, sys.Ns, general)
+    SystemDeviceSUN(original_crystal, sys.mode, crystal, dims, extfield, pairs, indices, onsite, gs, ewald, dipoles, sys.Ns, general)
 end
