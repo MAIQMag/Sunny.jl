@@ -88,11 +88,11 @@ function broaden!(data::CuArray{Ret}, bands::BandIntensitiesDevice{Ret}; energie
 
     gpu_kernel = CUDA.@cuda launch=false _broaden(data, bands.data, bands.disp, energies_d, kernel)
 
-    function get_shmem(threads; rows=size(bands.data,1))
+    function get_shmem(threads; rows=size(bands.data,1), nω=nω)
         if length(threads) == 2
             return 2 * threads[2] * rows * sizeof(Float64)
         else
-            return 2 * threads * rows * sizeof(Float64)
+            return 2 * cld(threads, nω) * rows * sizeof(Float64)
         end
     end
 
