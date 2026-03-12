@@ -1,4 +1,3 @@
-import StaticArrays: SMatrix
 import SpecialFunctions: erfc
 using LinearAlgebra
 
@@ -6,11 +5,28 @@ using LinearAlgebra
 #(⊗)(a::Sunny.Vec3,b::Sunny.Vec3) = reshape(kron(a,b), 3, 3)
 
 function (⊗)(a::Sunny.Vec3,b::Sunny.Vec3)
-    return SMatrix{3,3,Float64,9}(a[1]*b[1], a[2]*b[1], a[3]*b[1],
+    return Sunny.SMatrix{3,3,Float64,9}(a[1]*b[1], a[2]*b[1], a[3]*b[1],
                                   a[1]*b[2], a[2]*b[2], a[3]*b[2],
                                   a[1]*b[3], a[2]*b[3], a[3]*b[3])
 end
 
+function colwise(a, b, rmax)
+    round(Int, rmax / (a⋅normalize(b)) + 1e-6)
+end
+
+function get_nmax(latvecs, recipvecs, rmax)
+    nmax = Sunny.SVector{3, Int64}(colwise(latvecs[:,1], recipvecs[:,1], rmax) + 1,
+                             colwise(latvecs[:,2], recipvecs[:,2], rmax) + 1,
+                             colwise(latvecs[:,3], recipvecs[:,3], rmax) + 1)
+    return nmax
+end
+
+function get_mmax(latvecs, recipvecs, rmax)
+    mmax = Sunny.SVector{3, Int64}(colwise(recipvecs[:,1], latvecs[:,1], rmax),
+                             colwise(recipvecs[:,2], latvecs[:,2], rmax),
+                             colwise(recipvecs[:,3], latvecs[:,3], rmax))
+    return mmax
+end
 
 # Precompute the pairwise interaction matrix A between magnetic moments μ. For
 # q_reshaped = 0, this yields the usual Ewald energy, E = μᵢ Aᵢⱼ μⱼ / 2. Nonzero
@@ -53,12 +69,14 @@ function precompute_dipole_ewald_at_wavevector_kernel(A, cryst, dims::NTuple{3,I
     rmax = 6√2 * σ
     kmax = 6√2 / σ
 
-    nmax = map(eachcol(latvecs), eachcol(recipvecs)) do a, b
-        round(Int, rmax / (a⋅normalize(b)) + 1e-6) + 1
-    end
-    mmax = map(eachcol(latvecs), eachcol(recipvecs)) do a, b
-        round(Int, kmax / (b⋅normalize(a)) + 1e-6)
-    end
+    #nmax = map(eachcol(latvecs), eachcol(recipvecs)) do a, b
+    #    round(Int, rmax / (a⋅normalize(b)) + 1e-6) + 1
+    #end
+    #mmax = map(eachcol(latvecs), eachcol(recipvecs)) do a, b
+    #    round(Int, kmax / (b⋅normalize(a)) + 1e-6)
+    #end
+    nmax = get_nmax(latvecs, recipvecs, rmax)
+    mmax = get_mmax(latvecs, recipvecs, kmax)
 
     # nmax and mmax should be balanced here
     # println("nmax $nmax mmax $mmax")
