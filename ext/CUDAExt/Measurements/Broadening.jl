@@ -1,5 +1,5 @@
 struct BroadeningDevice{F} <: Sunny.AbstractBroadening
-    kernel :: F   # Function mapping x = (ω - ϵ) to an intensity scaling factor
+    kernel :: F        # Function mapping x = (ω - ϵ) to an intensity scaling factor
     fwhm :: Float64
 end
 
@@ -13,6 +13,29 @@ end
 
 function (b::BroadeningDevice)(ϵ, ω)
     b.kernel(ω - ϵ)
+end
+
+function Sunny.to_device(host::Sunny.Broadening)
+    return BroadeningDevice(host)
+end
+
+struct NonstationaryBroadeningDevice{F} <: Sunny.AbstractBroadening
+    kernel :: F    # (ϵ, ω) -> intensity
+end
+
+NonstationaryBroadeningDevice(host::Sunny.NonstationaryBroadening) = NonstationaryBroadeningDevice(host.kernel)
+
+function Adapt.adapt_structure(to, data::NonstationaryBroadeningDevice)
+    kernel = Adapt.adapt_structure(to, data.kernel)
+    NonstationaryBroadeningDevice(kernel)
+end
+
+function (b::NonstationaryBroadeningDevice)(ϵ, ω)
+    b.kernel(ϵ, ω)
+end
+
+function Sunny.to_device(host::Sunny.NonstationaryBroadening)
+    return NonstationaryBroadeningDevice(host)
 end
 
 function _broaden(data, bands_data, disp, energies, kernel)
@@ -63,14 +86,13 @@ function broaden!(data::CuArray{Ret}, bands::BandIntensitiesDevice{Ret}; energie
     #asdf = norm.(vec(bands.data))
     #cutoff = 1e-12 * Statistics.quantile(asdf, 0.95)
 
-    kernel_d = BroadeningDevice(kernel)
-    gpu_kernel = CUDA.@cuda launch=false _broaden(data, bands.data, bands.disp, energies_d, kernel_d)
+    gpu_kernel = CUDA.@cuda launch=false _broaden(data, bands.data, bands.disp, energies_d, kernel)
 
-    function get_shmem(threads; rows=size(bands.data,1))
+    function get_shmem(threads; rows=size(bands.data,1), nω=nω)
         if length(threads) == 2
             return 2 * threads[2] * rows * sizeof(Float64)
         else
-            return 2 * threads * rows * sizeof(Float64)
+            return 2 * cld(threads, nω) * rows * sizeof(Float64)
         end
     end
 
@@ -85,7 +107,7 @@ function broaden!(data::CuArray{Ret}, bands::BandIntensitiesDevice{Ret}; energie
     blocks_y = cld(nq, threads_y)
     blocks = (blocks_x, blocks_y)
 
-    gpu_kernel(data, bands.data, bands.disp, energies_d, kernel_d; threads=threads, blocks=blocks, shmem=get_shmem(threads))
+    gpu_kernel(data, bands.data, bands.disp, energies_d, kernel; threads=threads, blocks=blocks, shmem=get_shmem(threads))
     return data
 end
 
