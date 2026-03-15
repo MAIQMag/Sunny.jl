@@ -10,24 +10,6 @@ function (⊗)(a::Sunny.Vec3,b::Sunny.Vec3)
                                   a[1]*b[3], a[2]*b[3], a[3]*b[3])
 end
 
-function colwise(a, b, rmax)
-    round(Int, rmax / (a⋅normalize(b)) + 1e-6)
-end
-
-function get_nmax(latvecs, recipvecs, rmax)
-    nmax = Sunny.SVector{3, Int64}(colwise(latvecs[:,1], recipvecs[:,1], rmax) + 1,
-                             colwise(latvecs[:,2], recipvecs[:,2], rmax) + 1,
-                             colwise(latvecs[:,3], recipvecs[:,3], rmax) + 1)
-    return nmax
-end
-
-function get_mmax(latvecs, recipvecs, rmax)
-    mmax = Sunny.SVector{3, Int64}(colwise(recipvecs[:,1], latvecs[:,1], rmax),
-                             colwise(recipvecs[:,2], latvecs[:,2], rmax),
-                             colwise(recipvecs[:,3], latvecs[:,3], rmax))
-    return mmax
-end
-
 # Precompute the pairwise interaction matrix A between magnetic moments μ. For
 # q_reshaped = 0, this yields the usual Ewald energy, E = μᵢ Aᵢⱼ μⱼ / 2. Nonzero
 # q_reshaped is useful in spin wave theory. Physically, this amounts to a
@@ -42,13 +24,23 @@ end
 # exp(i x) = cos(x) + i sin(x)` with just `cos(x)` for efficiency. The parameter
 # `T ∈ {Float64, ComplexF64}` controls the return type in a type-stable way.
 function precompute_dipole_ewald_at_wavevector_kernel(A, cryst, dims::NTuple{3,Int}, demag::Sunny.Mat3, qs_reshaped, qs, μ0_μB²)
-    iq = threadIdx().x + (blockIdx().x - Int32(1)) * blockDim().x
+    i = threadIdx().x + (blockIdx().x - Int32(1)) * blockDim().x
+    if i > size(A, 4)
+        return
+    end
+
+    j = threadIdx().y + (blockIdx().y - Int32(1)) * blockDim().y
+    if j > size(A, 5)
+        return
+    end
+
+    iq = threadIdx().z + (blockIdx().z - Int32(1)) * blockDim().z
     if iq > size(A, 6)
         return
     end
-    na = Sunny.natoms(cryst)
-    Aq = @view A[:,:,:,:,:,iq]
-    @assert size(Aq) == (dims..., na, na)
+
+    Aq = @view A[:,:,:,i,j,iq]
+    @assert size(Aq) == dims
 
     q_reshaped = qs_reshaped * qs[iq]
 
@@ -69,18 +61,21 @@ function precompute_dipole_ewald_at_wavevector_kernel(A, cryst, dims::NTuple{3,I
     rmax = 6√2 * σ
     kmax = 6√2 / σ
 
-    #nmax = map(eachcol(latvecs), eachcol(recipvecs)) do a, b
-    #    round(Int, rmax / (a⋅normalize(b)) + 1e-6) + 1
-    #end
-    #mmax = map(eachcol(latvecs), eachcol(recipvecs)) do a, b
-    #    round(Int, kmax / (b⋅normalize(a)) + 1e-6)
-    #end
-    nmax = get_nmax(latvecs, recipvecs, rmax)
-    mmax = get_mmax(latvecs, recipvecs, kmax)
+    nmax = Sunny.SVector{3, Int64}(ntuple(3) do k
+        a = latvecs[:, k]
+        b = recipvecs[:, k]
+        round(Int, rmax / (a⋅normalize(b)) + 1e-6) + 1
+    end)
+
+    mmax = Sunny.SVector{3, Int64}(ntuple(3) do k
+        a = latvecs[:, k]
+        b = recipvecs[:, k]
+        round(Int, kmax / (b⋅normalize(a)) + 1e-6)
+    end)
 
     # nmax and mmax should be balanced here
     # println("nmax $nmax mmax $mmax")
-    for cell in CartesianIndices(dims), j in 1:na, i in 1:na
+    for cell in CartesianIndices(dims)
         acc = zero(eltype(A))
         cell_offset = Sunny.Vec3(cell[1]-1, cell[2]-1, cell[3]-1)
         Δr = cryst.latvecs * (cell_offset + cryst.positions[j] - cryst.positions[i])
@@ -97,7 +92,7 @@ function precompute_dipole_ewald_at_wavevector_kernel(A, cryst, dims::NTuple{3,I
                 rhat = rvec/r
                 erfc0 = erfc(r/(√2*σ))
                 gauss0 = √(2/π) * (r/σ) * exp(-r²/2σ²)
-                phase = cis(2π * dot(q_reshaped, n))
+                phase = cispi(2 * dot(q_reshaped, n))
                 acc += phase * (1/4π) * ((I₃/r³) * (erfc0 + gauss0) - (3(rhat⊗rhat)/r³) * (erfc0 + (1+r²/3σ²) * gauss0))
             end
         end
@@ -135,7 +130,7 @@ function precompute_dipole_ewald_at_wavevector_kernel(A, cryst, dims::NTuple{3,I
         # Julia arrays start at one, so we index A using (cell = off .+ 1).
         acc *= μ0_μB²
 
-        Aq[cell, i, j] = acc
+        Aq[cell] = acc
     end
 
     # TODO: Verify that A[off, i, j] ≈ A[-off, j, i]'
