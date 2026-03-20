@@ -48,30 +48,31 @@ function _broaden(data, bands_data, disp, energies, kernel)
         return
     end
 
-    bands_buf = CuDynamicSharedArray(Float64, (size(bands_data, 1), blockDim().y))
-    bands_bufq = view(bands_buf, :, threadIdx().y)
-    k = threadIdx().x
-    while k <= size(bands_data, 1)
-        bands_bufq[k] = bands_data[k, iq]
-        k += blockDim().x
-    end
+    @inbounds begin
+        bands_buf = CuDynamicSharedArray(Float64, (size(bands_data, 1), blockDim().y))
+        bands_bufq = view(bands_buf, :, threadIdx().y)
+        k = threadIdx().x
+        while k <= size(bands_data, 1)
+            bands_bufq[k] = bands_data[k, iq]
+            k += blockDim().x
+        end
 
-    disp_buf = CuDynamicSharedArray(Float64, (size(disp, 1), blockDim().y), size(bands_data, 1) * blockDim().y* sizeof(Float64))
-    disp_bufq = view(disp_buf, :, threadIdx().y)
-    k = threadIdx().x
-    while k <= size(disp, 1)
-        disp_bufq[k] = disp[k, iq]
-        k += blockDim().x
-    end
-    CUDA.sync_threads()
+        disp_buf = CuDynamicSharedArray(Float64, (size(disp, 1), blockDim().y), size(bands_data, 1) * blockDim().y* sizeof(Float64))
+        disp_bufq = view(disp_buf, :, threadIdx().y)
+        k = threadIdx().x
+        while k <= size(disp, 1)
+            disp_bufq[k] = disp[k, iq]
+            k += blockDim().x
+        end
+        CUDA.sync_threads()
 
-    ω = energies[iω]
-    total = 0.
-    for ib in eachindex(disp_bufq)
-        total += kernel(disp_bufq[ib], ω) * bands_bufq[ib]
+        ω = energies[iω]
+        total = 0.
+        for ib in eachindex(disp_bufq)
+            total += kernel(disp_bufq[ib], ω) * bands_bufq[ib]
+        end
+        data[iω, iq] = total
     end
-    data[iω, iq] = total
-
     return
 end
 
