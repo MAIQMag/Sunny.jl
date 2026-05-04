@@ -36,6 +36,14 @@ function _frequencies(H, evalues)
     return
 end
 
+function Avec_pref(sys, measure, q_global, μ, i)
+    r_global = global_position(sys, (1, 1, 1, i)) # + offsets[μ, i]
+    ff = Sunny.get_swt_formfactor(measure, μ, i)
+    value = exp(- im * dot(q_global, r_global))
+    value *= Sunny.compute_form_factor(ff, Sunny.norm2(q_global))
+    return value
+end
+
 function _intensities(swt, qs, L, Ncells, H, Nobs, Na, Ncorr, recipvecs, intensity, kT, disp)
     iq = threadIdx().x + (blockIdx().x - Int32(1)) * blockDim().x
     if iq > size(H,3)
@@ -45,39 +53,52 @@ function _intensities(swt, qs, L, Ncells, H, Nobs, Na, Ncorr, recipvecs, intensi
     Hq = view(H,:,:,iq)
     corrbuf = CuDynamicSharedArray(ComplexF64, (Ncorr, blockDim().x))
     corrbufq = view(corrbuf,:,threadIdx().x)
-    Avec_pref = CuDynamicSharedArray(ComplexF64, (Nobs, Na, blockDim().x), (Ncorr + Nobs) * blockDim().x * sizeof(ComplexF64))
-    Avec_prefq = view(Avec_pref,:,:,threadIdx().x)
+    #Avec_pref = CuDynamicSharedArray(ComplexF64, (Nobs, Na, blockDim().x), (Ncorr + Nobs) * blockDim().x * sizeof(ComplexF64))
+    #Avec_prefq = view(Avec_pref,:,:,threadIdx().x)
 
     (; sys, measure) = swt
     q_global = recipvecs * q
-    for i in 1:Na, μ in 1:Nobs
-        r_global = global_position(sys, (1, 1, 1, i)) # + offsets[μ, i]
-        ff = Sunny.get_swt_formfactor(measure, μ, i)
-        Avec_prefq[μ, i] = exp(- im * dot(q_global, r_global))
-        Avec_prefq[μ, i] *= Sunny.compute_form_factor(ff, Sunny.norm2(q_global))
-    end
+    #for i in 1:Na, μ in 1:Nobs
+    #    r_global = global_position(sys, (1, 1, 1, i)) # + offsets[μ, i]
+    #    ff = Sunny.get_swt_formfactor(measure, μ, i)
+    #    Avec_prefq[μ, i] = exp(- im * dot(q_global, r_global))
+    #    Avec_prefq[μ, i] *= Sunny.compute_form_factor(ff, Sunny.norm2(q_global))
+    #end
 
     Avec = CuDynamicSharedArray(ComplexF64, (Nobs, blockDim().x), Ncorr * blockDim().x * sizeof(ComplexF64))
     Avecq = view(Avec, :, threadIdx().x)
     # Fill `intensity` array
     for band in 1:L
-        for idx in eachindex(Avecq)
-            Avecq[idx] = 0.
-        end
+        #for idx in eachindex(Avecq)
+        #    Avecq[idx] = 0.
+        #end
         t = view(Hq, :, band+L)
         if sys.mode == SUN
             data = swt.data::SWTDataSUNDevice
             N = sys.Ns
-            for i in 1:Na, μ in 1:Nobs
+            #=for i in 1:Na, μ in 1:Nobs
                 O = view(data.observables_localized, :, :, μ, i)
                 for α in 1:N-1
                    idx = α + (i-1)*(N-1)
                    Avecq[μ] += Avec_prefq[μ, i] * (O[α, N] * t[idx + L] + O[N, α] * t[idx])
                 end
-            end
+            end=#
+	    for μ in 1:Nobs
+                outer_sum = ComplexF64(0.)
+                for i in 1:Na
+                    O = view(data.observables_localized, :, :, μ, i)
+                    inner_sum = ComplexF64(0.)
+                    for α in 1:N-1
+                        idx = α + (i-1)*(N-1)
+                        inner_sum += (O[α, N] * t[idx + L] + O[N, α] * t[idx])
+                    end
+                    outer_sum += Avec_pref(sys, measure, q_global, μ, i) * inner_sum
+		end
+		Avecq[μ] = outer_sum
+	    end
         else
             data = swt.data::SWTDataDipoleDevice
-            for i in 1:Na, μ in 1:Nobs
+            #=for i in 1:Na, μ in 1:Nobs
                 O = data.observables_localized[μ, i]
                 # This is the Avec of the two transverse and one
                 # longitudinal directions in the local frame. (In the
@@ -85,8 +106,21 @@ function _intensities(swt, qs, L, Ncells, H, Nobs, Na, Ncorr, recipvecs, intensi
                 # the transverse part only, so the last entry is zero)
                 displacement_local_frame = Sunny.SA[t[i + Na] + t[i], im * (t[i + Na] - t[i]), 0.0]
                 Avecq[μ] += Avec_prefq[μ, i] * (data.sqrtS[i]/√2) * (O' * displacement_local_frame)[1]
+            end=#
+	    for μ in 1:Nobs
+                sum = ComplexF64(0.)
+                for i in 1:Na
+                    O = data.observables_localized[μ, i]
+                    # This is the Avec of the two transverse and one
+                    # longitudinal directions in the local frame. (In the
+                    # local frame, z is longitudinal, and we are computing
+                    # the transverse part only, so the last entry is zero)
+                    displacement_local_frame = Sunny.SA[t[i + Na] + t[i], im * (t[i + Na] - t[i]), 0.0]
+                    sum += Avec_pref(sys, measure, q_global, μ, i) * (data.sqrtS[i]/√2) * (O' * displacement_local_frame)[1]
+                end
+                Avecq[μ] = sum
             end
-        end
+	end
         for idx in eachindex(corrbufq)
             (μ, ν) = measure.corr_pairs[idx]
             corrbufq[idx] = Avecq[μ] * conj(Avecq[ν]) / Ncells
@@ -170,7 +204,7 @@ function Sunny.intensities_bands(swt::SpinWaveTheoryDevice, qpts; kT=0, with_neg
 
     intensity_d = CUDA.zeros(eltype(measure), L, Nq)
     kernel = @cuda launch=false _intensities(swt, qs_d, L, Ncells, I_d, Nobs, Na, Ncorr, cryst.recipvecs, intensity_d, kT, disp_d)
-    get_shmem(threads; Nobs=Nobs, Na=Na, Ncorr=Ncorr) = threads * sizeof(ComplexF64) * (Nobs * (1 + Na) + Ncorr)
+    get_shmem(threads; Nobs=Nobs, Na=Na, Ncorr=Ncorr) = threads * sizeof(ComplexF64) * (Nobs + Ncorr)
     config = launch_configuration(kernel.fun, shmem=threads->get_shmem(threads))
     threads = Base.min(Nq, config.threads)
     blocks = cld(Nq, threads)
