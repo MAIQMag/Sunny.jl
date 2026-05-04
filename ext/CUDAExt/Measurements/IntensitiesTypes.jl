@@ -59,3 +59,12 @@ function Base.show(io::IO, res::PowderIntensitiesDevice)
     sz = join(size(res.data), "×")
     print(io, string(typeof(res)) * " ($sz elements)")
 end
+
+struct StaticIntensitiesDevice{T, Q <: Sunny.AbstractQPoints, D} <: Sunny.AbstractIntensities
+    # Original chemical cell
+    crystal :: CrystalDevice
+    # Wavevectors in RLU
+    qpts :: Q
+    # Intensity data integrated over ω
+    data :: CUDA.CuArray{T, D} # (nq...)
+end
