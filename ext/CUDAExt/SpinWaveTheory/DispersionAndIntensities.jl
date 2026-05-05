@@ -215,21 +215,57 @@ function Sunny.intensities_bands(swt::SpinWaveTheoryDevice, qpts; kT=0, with_neg
     return BandIntensitiesDevice(cryst, qpts, disp_d, intensity_d)
 end
 
+function _sum_intensities(bounds, data_reduced, res_disp, res_data)
+    i = threadIdx().x + (blockIdx().x - Int32(1)) * blockDim().x
+    if i > length(data_reduced)
+        return
+    end
+    sum = 0.
+    iq = CartesianIndices(size(data_reduced))[i]
+    @inbounds for ib in axes(res_data, 1)
+        ϵ = res_disp[ib, iq]
+        if bounds[1] <= ϵ < bounds[2]
+            sum += res_data[ib, iq]
+        end
+    end
+    data_reduced[iq] = sum
+    return
+end
+
+function _sum_intensities_kernel(bounds, kernel, data_reduced, res_disp, res_data)
+    i = threadIdx().x + (blockIdx().x - Int32(1)) * blockDim().x
+    if i > length(data_reduced)
+        return
+    end
+    sum = 0.
+    iq = CartesianIndices(size(data_reduced))[i]
+    @inbounds for ib in axes(res_data, 1)
+        ϵ = res_disp[ib, iq]
+        ihi = kernel.integral(bounds[2] - ϵ)
+        ilo = kernel.integral(bounds[1] - ϵ)
+        sum += res.data[ib, iq] * (ihi - ilo)
+    end
+    data_reduced[iq] = sum
+    return
+end
+
 function intensities_static(swt::SpinWaveTheoryDevice, qpts; bounds=(-Inf, Inf), kernel=nothing, kT=0)
     res = intensities_bands(swt, qpts; kT)  # TODO: with_negative=true
-    data_reduced = CUDA.zeros(eltype(res.data), size(res.data)[2:end])
-    #=for ib in axes(res.data, 1), iq in CartesianIndices(data_reduced)
-        ϵ = res.disp[ib, iq]
-        if isnothing(kernel) || bounds == (-Inf, Inf)
-            if bounds[1] <= ϵ < bounds[2]
-                data_reduced[iq] += res.data[ib, iq]
-            end
-        #else
-        #    isnothing(kernel.integral) && error("Kernel must provide integral")
-        #    ihi = kernel.integral(bounds[2] - ϵ)
-        #    ilo = kernel.integral(bounds[1] - ϵ)
-        #    data_reduced[iq] += res.data[ib, iq] * (ihi - ilo)
-        end
-    end=#
+    data_reduced = CUDA.CuArray{eltype(res.data)}(size(res.data)[2:end])
+    if isnothing(kernel) || bounds == (-Inf, Inf)
+        Nq = length(data_reduced)
+        kernel  = CUDA.@cuda launch=false _sum_intensities(bounds, data_reduced, res.disp, res.data)
+        config = launch_configuration(kernel.   fun)
+        threads = Base.min(Nq, config.threads)
+        blocks = cld(Nq, threads)
+        kernel(bounds, data_reduced, res.disp, res.data; threads=threads, blocks=blocks)
+    else
+        Nq = length(data_reduced)
+        kernel  = CUDA.@cuda launch=false _sum_intensities_kernel(bounds, kernel, data_reduced, res.disp, res.data)
+        config = launch_configuration(kernel.fun)
+        threads = Base.min(Nq, config.threads)
+        blocks = cld(Nq, threads)
+        kernel(bounds, kernel, data_reduced, res.disp, res.data; threads=threads, blocks=blocks)
+    end
     StaticIntensitiesDevice(res.crystal, res.qpts, data_reduced)
 end

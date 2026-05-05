@@ -68,3 +68,14 @@ struct StaticIntensitiesDevice{T, Q <: Sunny.AbstractQPoints, D} <: Sunny.Abstra
     # Intensity data integrated over ω
     data :: CUDA.CuArray{T, D} # (nq...)
 end
+
+function Sunny.StaticIntensities(device::StaticIntensitiesDevice, crystal::Sunny.Crystal)
+    if device.qpts isa QPathDevice
+        qpts = Sunny.QPath(device.qpts)
+    elseif device.qpts isa QPointsDevice
+        qpts = Sunny.QPoints(device.qpts)
+    else
+        qpts = device.qpts
+    end
+    return Sunny.StaticIntensities(crystal, qpts, Array(device.data))
+end
