@@ -238,7 +238,7 @@ function Sunny.intensities_bands(swt::SpinWaveTheoryDevice, qpts; kT=0, with_neg
     intensity_d = CUDA.zeros(eltype(measure), L, Nq)
     kernel = @cuda launch=false _intensities(swt, qs_d, L, Ncells, I_d, Nobs, Na, Ncorr, cryst.recipvecs, intensity_d, kT, disp_d)
     get_shmem(threads; Nobs=Nobs, Na=Na, Ncorr=Ncorr) = threads * sizeof(ComplexF64) * (Nobs * (1 + Na) + Ncorr)
-    config = launch_configuration(kernel.fun, shmem=threads->get_shmem_high(threads))
+    config = launch_configuration(kernel.fun, shmem=threads->get_shmem(threads))
     use_lowershmem = config.threads < 1
     if(use_lowershmem)
         kernel = @cuda launch=false _intensities_lowershmem(swt, qs_d, L, Ncells, I_d, Nobs, Na, Ncorr, cryst.recipvecs, intensity_d, kT, disp_d)
