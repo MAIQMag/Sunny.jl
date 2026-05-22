@@ -290,8 +290,11 @@ end
 
 function intensities_static(swt::SpinWaveTheoryDevice, qpts; bounds=(-Inf, Inf), kernel=nothing, kT=0)
     res = intensities_bands(swt, qpts; kT)  # TODO: with_negative=true
+    if bounds == (-Inf, Inf)
+        return StaticIntensitiesDevice(res.crystal, res.qpts, sum(res.data, dims=1))
+    end
     data_reduced = CUDA.CuArray{eltype(res.data)}(undef, size(res.data)[2:end])
-    if isnothing(kernel) || bounds == (-Inf, Inf)
+    if isnothing(kernel)
         Nq = length(data_reduced)
         kernel  = CUDA.@cuda launch=false _sum_intensities(bounds, data_reduced, res.disp, res.data)
         config = launch_configuration(kernel.   fun)
