@@ -6,10 +6,10 @@ on:
 
 jobs:
   excl-zenith-3090:
-    if: |
-      github.repository_owner == 'MAIQMag' &&
-      github.event.issue.pull_request &&
-      startsWith(github.event.comment.body, 'Test this please')
+    #if: |
+    #  github.repository_owner == 'MAIQMag' &&
+    #  github.event.issue.pull_request &&
+    #  startsWith(github.event.comment.body, 'Test this please')
 
     runs-on: [self-hosted, Linux, X64, ornl-excl-zenith]
 
