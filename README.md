@@ -18,8 +18,6 @@
 
 ## Overview
 
-delete me!
-
 Sunny is a Julia package for simulating magnetism. It emphasizes symmetry-aware spin Hamiltonians, efficient methods for capturing quantum effects, and comparison with scattering data. Sunny is extensively documented, supports interactive visualization, and facilitates model fitting.
 
 ## Try it out
