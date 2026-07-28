@@ -54,6 +54,7 @@ WGLMakiePrecompilesExt = ["Makie", "WGLMakie"]
 Adapt = "4.4.0"
 Brillouin = "0.5.19"
 CUDA = "5.9.5"
+CUDA_Runtime_jll = "13.3"
 CairoMakie = "0.15.9"
 ChainRulesCore = "1.26.0"
 CrystalInfoFramework = "0.8, 1, 2"
