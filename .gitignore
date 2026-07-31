@@ -8,5 +8,3 @@ profile.pb.gz
 *.lyx~
 *.lyx#
 
-benchmarks/findings.md
-benchmarks/phase3_design.md
