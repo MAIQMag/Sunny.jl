@@ -75,7 +75,7 @@ jobs:
       - name: Setup Julia
         if: steps.check.outputs.triggered == 'true'
         run: |
-          julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.add("CUDA")'
+          julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.add(["CUDA", "KernelAbstractions"])'
           julia --project -e 'using CUDA; CUDA.set_runtime_version!(local_toolkit=true)'
 
       - name: Cache Julia
