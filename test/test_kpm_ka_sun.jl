@@ -8,17 +8,16 @@
 #   2. SUN end-to-end intensities vs Sunny CPU SpinWaveTheoryKPM (SU(2), spin-1/2)
 #   3. SUN end-to-end intensities, multi-atom unit cell (SU(3), spin-1)
 
-using Test
-using Sunny
-using KernelAbstractions
-using LinearAlgebra
-using Random
 
-backend = KernelAbstractions.CPU()
-ka_ext = Base.get_extension(Sunny, :KAExt)
-@assert ka_ext !== nothing "KAExt failed to load"
+@testsnippet KABackendSetup begin
+    using KernelAbstractions
+    backend = KernelAbstractions.CPU()
+    ka_ext = Base.get_extension(Sunny, :KAExt)
+    @test ka_ext !== nothing
+end
 
-@testset "KA SUN batched matvec vs CPU (SU(2), spin-1/2, single atom)" begin
+@testitem "KA SUN batched matvec vs CPU (SU(2), spin-1/2, single atom)" setup=[KABackendSetup] begin
+    using Random
     latvecs = lattice_vectors(1.0, 1.0, 1.0, 90, 90, 90)
     cryst   = Crystal(latvecs, [[0, 0, 0]])
     sys     = System(cryst, [1 => Moment(s=1/2, g=2)], :SUN, seed=1)
@@ -61,7 +60,8 @@ ka_ext = Base.get_extension(Sunny, :KAExt)
     end
 end
 
-@testset "KA SUN batched matvec vs CPU (SU(3), spin-1, 2x2x2 supercell)" begin
+@testitem "KA SUN batched matvec vs CPU (SU(3), spin-1, 2x2x2 supercell)" setup=[KABackendSetup] begin
+    using Random
     # 2×2×2 supercell gives Na=8 atoms after SWT reshaping, exercising multi-atom paths
     latvecs = lattice_vectors(1.0, 1.0, 1.0, 90, 90, 90)
     cryst   = Crystal(latvecs, [[0, 0, 0]])
@@ -103,7 +103,7 @@ end
     end
 end
 
-@testset "KA SUN end-to-end intensities vs CPU (SU(2), spin-1/2)" begin
+@testitem "KA SUN end-to-end intensities vs CPU (SU(2), spin-1/2)" setup=[KABackendSetup] begin
     latvecs = lattice_vectors(1.0, 1.0, 1.0, 90, 90, 90)
     cryst   = Crystal(latvecs, [[0, 0, 0]])
     sys     = System(cryst, [1 => Moment(s=1/2, g=2)], :SUN, seed=3)
@@ -129,7 +129,7 @@ end
     @test maximum(abs, res_batch.data .- res_cpu.data) / maxref < 1e-10
 end
 
-@testset "KA SUN end-to-end intensities vs CPU (SU(3), spin-1, two-atom cell)" begin
+@testitem "KA SUN end-to-end intensities vs CPU (SU(3), spin-1, two-atom cell)" setup=[KABackendSetup] begin
     latvecs = lattice_vectors(1.0, 1.0, 2.0, 90, 90, 90)
     cryst   = Crystal(latvecs, [[0, 0, 0], [0, 0, 0.5]]; types=["A", "B"])
     sys     = System(cryst, [1 => Moment(s=1, g=2), 2 => Moment(s=1, g=2)], :SUN, seed=4)
@@ -156,7 +156,7 @@ end
     @test maximum(abs, res_batch.data .- res_cpu.data) / maxref < 1e-6
 end
 
-@testset "KA SUN FP32 intensities vs FP64 (SU(2), spin-1/2)" begin
+@testitem "KA SUN FP32 intensities vs FP64 (SU(2), spin-1/2)" setup=[KABackendSetup] begin
     latvecs = lattice_vectors(1.0, 1.0, 1.0, 90, 90, 90)
     cryst   = Crystal(latvecs, [[0, 0, 0]])
     sys     = System(cryst, [1 => Moment(s=1/2, g=2)], :SUN, seed=5)
@@ -180,7 +180,7 @@ end
     @test maximum(abs, res_fp32.data .- res_fp64.data) / maxref < 1e-3
 end
 
-@testset "KA error: method=:kpm rejected at to_device_batched" begin
+@testitem "KA error: method=:kpm rejected at to_device_batched" setup=[KABackendSetup] begin
     latvecs = lattice_vectors(1.0, 1.0, 1.0, 90, 90, 90)
     cryst   = Crystal(latvecs, [[0, 0, 0]])
     sys     = System(cryst, [1 => Moment(s=1/2, g=2)], :SUN, seed=6)
@@ -193,11 +193,11 @@ end
 
 # ── Tests added during kpm-gpu SU(N) validation ─────────────────────────────
 #
-# These four testsets cover properties confirmed by the comprehensive benchmark
+# These four testitems cover properties confirmed by the comprehensive benchmark
 # validation (benchmarks/sun_comprehensive_validation.jl) that were not covered
-# by the testsets above.
+# by the testitems above.
 
-@testset "KA SUN odd-niters parity fix (SU(3), s=1, cubic 2×2×2)" begin
+@testitem "KA SUN odd-niters parity fix (SU(3), s=1, cubic 2×2×2)" setup=[KABackendSetup] begin
     # Fix applied in intensities_lanczos_device_batched_ka!: the FP64 GPU Lanczos
     # path now rounds odd niters up to even (max_iters_global += mod(max_iters_global, 2)),
     # matching Sunny's CPU lanczos() which does the same.  Without the fix, niters=5
@@ -228,7 +228,7 @@ end
     end
 end
 
-@testset "KA SUN adaptive tol (SU(3), s=1, triangular AFM 3×3)" begin
+@testitem "KA SUN adaptive tol (SU(3), s=1, triangular AFM 3×3)" setup=[KABackendSetup] begin
     latvecs = lattice_vectors(1.0, 1.0, 10.0, 90, 90, 120)
     cryst   = Crystal(latvecs, [[0, 0, 0]])
     sys     = System(cryst, [1 => Moment(s=1, g=2)], :SUN; dims=(3, 3, 1), seed=0)
@@ -251,7 +251,7 @@ end
     @test maximum(abs, res_gpu.data .- res_cpu.data) / maxref < 1e-5
 end
 
-@testset "KA SUN finite temperature, K→M path (SU(3), s=1, triangular AFM 3×3)" begin
+@testitem "KA SUN finite temperature, K→M path (SU(3), s=1, triangular AFM 3×3)" setup=[KABackendSetup] begin
     # kT>0 at q=Γ is numerically unstable: the Goldstone mode has a Ritz eigenvalue
     # ~±1e-8, and thermal_prefactor sensitivity kT/λ² ≈ 5×10¹² at (λ=1e-8, kT=0.5)
     # amplifies a 2×10⁻¹³ CPU/GPU FP difference to ~1000 thermal-weight error → 16%.
@@ -280,7 +280,7 @@ end
     end
 end
 
-@testset "KA SUN scale independence niters=10 (SU(3), s=1, triangular AFM)" begin
+@testitem "KA SUN scale independence niters=10 (SU(3), s=1, triangular AFM)" setup=[KABackendSetup] begin
     # GPU kernel accuracy at niters=10 (~1e-5 for SU(N) bandwidth ~24) must be
     # independent of system size Na.  Tests Na=9 (3×3×1) and Na=36 (6×6×1).
     latvecs  = lattice_vectors(1.0, 1.0, 10.0, 90, 90, 120)
