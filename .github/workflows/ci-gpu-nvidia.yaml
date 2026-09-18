@@ -78,7 +78,7 @@ jobs:
         run: |
           printenv
           julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.add(["CUDA", "KernelAbstractions"])'
-          julia --project -e 'using CUDA; CUDA.set_runtime_version!(v"13.1"; local_toolkit=true); CUDA.versioninfo()'
+          julia --project -e 'using CUDA; CUDA.set_runtime_version!(v"13.1"; local_toolkit=true)'
           julia --project -e 'using CUDA; CUDA.versioninfo()'
 
       - name: Cache Julia
