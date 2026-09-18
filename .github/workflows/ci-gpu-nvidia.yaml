@@ -17,11 +17,11 @@ jobs:
       GH_JOBNAME: ${{matrix.jobname}}
       GH_OS: Linux
       JULIA_DEPOT_PATH: /home/svh/.julia-zenith
-      CUDA_HOME: /opt/nvidia/hpc_sdk/Linux_x86_64/26.5/cuda/13.2
+      CUDA_HOME: /opt/nvidia/hpc_sdk/Linux_x86_64/26.3/cuda/13.1
     strategy:
       fail-fast: false
       matrix:
-        jobname: [CUDA13-JULIA1_12]
+        jobname: [CUDA13-JULIA1_13]
 
     steps:
       # Only trigger CI for certain "actors" (those commenting the PR, not the PR originator)
@@ -77,12 +77,9 @@ jobs:
         if: steps.check.outputs.triggered == 'true'
         run: |
           printenv
-          unset MODULEPATH_ROOT
-          unset MODULEPATH
-          source /etc/profile.d/lmod.sh
-          module load nvhpc/26.5
           julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.add(["CUDA", "KernelAbstractions"])'
-          julia --project -e 'using CUDA; CUDA.set_runtime_version!(v"13.2"; local_toolkit=true); CUDA.versioninfo()'
+          julia --project -e 'using CUDA; CUDA.set_runtime_version!(v"13.1"; local_toolkit=true); CUDA.versioninfo()'
+          julia --project -e 'using CUDA; CUDA.versioninfo()'
 
       - name: Cache Julia
         if: steps.check.outputs.triggered == 'true'
