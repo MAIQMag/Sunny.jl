@@ -17,6 +17,8 @@ jobs:
       GH_JOBNAME: ${{matrix.jobname}}
       GH_OS: Linux
       JULIA_DEPOT_PATH: /home/svh/.julia-zenith
+      JULIA_CUDA_USE_BINARYBUILDER: false
+      CUDA_HOME: /opt/nvidia/hpc_sdk/Linux_x86_64/26.5/cuda/13.2
     strategy:
       fail-fast: false
       matrix:
@@ -28,8 +30,6 @@ jobs:
         env:
           ACTOR_TOKEN: ${{secrets.TOKENIZER}}${{github.actor}}${{secrets.TOKENIZER}}
           SECRET_ACTORS: ${{secrets.CI_GPU_ACTORS}}
-          JULIA_CUDA_USE_BINARYBUILDER: false
-          CUDA_HOME: /opt/nvidia/hpc_sdk/Linux_x86_64/26.5/cuda/13.2
         if: contains(env.SECRET_ACTORS, env.ACTOR_TOKEN)
         id: check
         run: |
