@@ -1,8 +1,11 @@
 module CUDAExt
 
-using Adapt
-using CUDA
-using Sunny
+using Adapt: Adapt
+using CUDA: CUDA, @cuda, CUBLAS, CUSOLVER, CuArray, CuDynamicSharedArray,
+            CuMatrix, CuPtr, CuVector, StridedCuArray, blockDim, blockIdx,
+            launch_configuration, threadIdx
+using Sunny: Sunny, Bond, Crystal, SpinWaveTheory, System, global_position, 
+             intensities_bands
 
 include("FormFactor.jl")
 include("EigenBatched.jl")
