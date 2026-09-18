@@ -18,6 +18,7 @@ jobs:
       GH_OS: Linux
       JULIA_DEPOT_PATH: /home/svh/.julia-zenith
       CUDA_HOME: /opt/nvidia/hpc_sdk/Linux_x86_64/26.3/cuda/13.1
+      JULIA_DEBUG: CUDA_Runtime_Discovery
     strategy:
       fail-fast: false
       matrix:
