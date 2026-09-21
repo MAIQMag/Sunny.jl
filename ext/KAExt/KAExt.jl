@@ -1,10 +1,9 @@
 module KAExt
 
-using Adapt
-using KernelAbstractions
-using Sunny
-using LinearAlgebra
-using StaticArrays
+using Adapt: Adapt
+using KernelAbstractions: KernelAbstractions, @groupsize, @index, @kernel, @localmem, @synchronize, @uniform
+using StaticArrays: StaticArrays, SArray, SMatrix, SVector
+using Sunny: Sunny 
 
 include("System/Types.jl")
 include("System/TypesSUN.jl")

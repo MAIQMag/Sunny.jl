@@ -45,7 +45,7 @@ Feature highlights include:
   summation, as illustrated in the [pyrochlore SWT example](@ref "7. Long-range
   dipole interactions"). Dipole-dipole interactions in classical dynamics are
   accelerated with the fast Fourier transform (FFT).
-- Self-consistent Gaussian Approximation ([SCGA](@ref)) for calculating static
+- Self-consistent Gaussian Approximation ([`SCGA`](@ref)) for calculating static
   observables, e.g. ``\mathcal{S}(𝐪)`` and ``χ``, in the paramagnetic phase.
   Magnetic ions on symmetry-inequivalent sublattices are properly handled.
 - Tools for comparing to experimental data: [form factors](@ref FormFactor),
