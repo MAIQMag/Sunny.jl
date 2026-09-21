@@ -10,17 +10,15 @@
 # Reference for every accuracy test is Sunny's unmodified
 # `intensities(::SpinWaveTheoryKPM)` on the CPU.
 
-using Test
-using Sunny
-using KernelAbstractions
-using LinearAlgebra
-using Random
+@testsnippet KABackendSetup begin
+    using KernelAbstractions
+    backend = KernelAbstractions.CPU()
+    ka_ext = Base.get_extension(Sunny, :KAExt)
+    @test ka_ext !== nothing
+end
 
-backend = KernelAbstractions.CPU()
-ka_ext = Base.get_extension(Sunny, :KAExt)
-@assert ka_ext !== nothing "KAExt failed to load"
-
-@testset "KA matvec per-q vs CPU" begin
+@testitem "KA matvec per-q vs CPU" setup=[KABackendSetup] begin
+    using Random
     latvecs = lattice_vectors(1.0, 1.0, 1.0, 90, 90, 90)
     cryst = Crystal(latvecs, [[0, 0, 0]])
     sys = System(cryst, [1 => Moment(s=1, g=2)], :dipole, seed=0)
@@ -53,7 +51,8 @@ ka_ext = Base.get_extension(Sunny, :KAExt)
     @test maximum(abs, Array(y_ka)[1, :] .- y_cpu) / maximum(abs, y_cpu) < 1e-13
 end
 
-@testset "KA batched matvec vs per-q" begin
+@testitem "KA batched matvec vs per-q" setup=[KABackendSetup] begin
+    using Random
     latvecs = lattice_vectors(1.0, 1.0, 1.0, 90, 90, 90)
     cryst = Crystal(latvecs, [[0, 0, 0]])
     sys = System(cryst, [1 => Moment(s=1, g=2)], :dipole, dims=(2,2,2), seed=0)
@@ -87,7 +86,7 @@ end
     end
 end
 
-@testset "KA end-to-end intensities vs Sunny CPU (cubic FM primitive)" begin
+@testitem "KA end-to-end intensities vs Sunny CPU (cubic FM primitive)" setup=[KABackendSetup] begin
     latvecs = lattice_vectors(1.0, 1.0, 1.0, 90, 90, 90)
     cryst = Crystal(latvecs, [[0, 0, 0]])
     sys = System(cryst, [1 => Moment(s=1, g=2)], :dipole, seed=0)
@@ -116,7 +115,7 @@ end
     @test maximum(abs, res_batch.data .- res_cpu.data) / maxref < 1e-10
 end
 
-@testset "KA end-to-end intensities vs Sunny CPU (cubic FM 2x2x2)" begin
+@testitem "KA end-to-end intensities vs Sunny CPU (cubic FM 2x2x2)" setup=[KABackendSetup] begin
     latvecs = lattice_vectors(1.0, 1.0, 1.0, 90, 90, 90)
     cryst = Crystal(latvecs, [[0, 0, 0]])
     sys = System(cryst, [1 => Moment(s=1, g=2)], :dipole, dims=(2,2,2), seed=0)
@@ -145,7 +144,7 @@ end
     @test maximum(abs, res_batch.data .- res_cpu.data) / maxref < 1e-10
 end
 
-@testset "KA with biquadratic coupling" begin
+@testitem "KA with biquadratic coupling" setup=[KABackendSetup] begin
     latvecs = lattice_vectors(1, 1, 1, 90, 90, 90)
     cryst = Crystal(latvecs, [[0, 0, 0]])
     sys = System(cryst, [1 => Moment(s=1, g=2)], :dipole, dims=(2,2,2), seed=0)
@@ -174,7 +173,7 @@ end
     @test maximum(abs, res_batch.data .- res_cpu.data) / maxref < 1e-10
 end
 
-@testset "KA with different q-path direction" begin
+@testitem "KA with different q-path direction" setup=[KABackendSetup] begin
     latvecs = lattice_vectors(1, 1, 1, 90, 90, 90)
     cryst = Crystal(latvecs, [[0, 0, 0]])
     sys = System(cryst, [1 => Moment(s=1, g=2)], :dipole, dims=(2,2,2), seed=0)
@@ -203,7 +202,7 @@ end
     @test maximum(abs, res_batch.data .- res_cpu.data) / maxref < 1e-10
 end
 
-@testset "KA with ssf_trace measure" begin
+@testitem "KA with ssf_trace measure" setup=[KABackendSetup] begin
     latvecs = lattice_vectors(1, 1, 1, 90, 90, 90)
     cryst = Crystal(latvecs, [[0, 0, 0]])
     sys = System(cryst, [1 => Moment(s=1, g=2)], :dipole, dims=(2,2,2), seed=0)
@@ -232,7 +231,7 @@ end
     @test maximum(abs, res_batch.data .- res_cpu.data) / maxref < 1e-10
 end
 
-@testset "method=:kpm rejected at to_device_batched" begin
+@testitem "method=:kpm rejected at to_device_batched" setup=[KABackendSetup] begin
     latvecs = lattice_vectors(1.0, 1.0, 1.0, 90, 90, 90)
     cryst = Crystal(latvecs, [[0, 0, 0]])
     sys = System(cryst, [1 => Moment(s=1, g=2)], :dipole, dims=(2,2,2), seed=0)
