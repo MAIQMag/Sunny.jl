@@ -142,7 +142,7 @@ end
 function dimensionless_spg_cell(cell)
     (; lattice, positions, atoms, magmoms) = cell
     # See https://github.com/spglib/spglib/issues/595 for discussion of a0
-    a0 = minimum(svdvals(Mat3(lattice)))
+    a0 = minimum(svdvals(Mat3(collect(lattice))))
     cell = Spglib.Cell(lattice/a0, positions, atoms, magmoms)
     return (; cell, a0)
 end
