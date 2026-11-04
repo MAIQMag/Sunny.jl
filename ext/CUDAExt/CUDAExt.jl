@@ -4,8 +4,8 @@ using Adapt: Adapt
 using CUDA: CUDA, @cuda, CuArray, CuDynamicSharedArray,
             CuMatrix, CuPtr, CuVector, StridedCuArray, blockDim, blockIdx,
             launch_configuration, threadIdx
-using cuBLAS
-using cuSOLVER
+using cuBLAS : cuBLAS
+using cuSOLVER : cuSOLVER
 using Sunny: Sunny, Bond, Crystal, SpinWaveTheory, System, global_position, 
              intensities_bands
 
