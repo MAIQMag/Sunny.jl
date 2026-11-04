@@ -1,8 +1,8 @@
 using LinearAlgebra: BlasFloat, checksquare
 
 using CUDA: unsafe_free!, with_workspaces, findfirst
-using CUDA.CUBLAS: unsafe_strided_batch, handle, cublasZtrsmBatched_64, cublasCtrsmBatched_64
-using CUDA.CUSOLVER: dense_handle, CuSolverParameters, cusolverDnZpotrfBatched, cusolverDnCpotrfBatched, cusolverDnXsyevBatched_bufferSize, cusolverDnXsyevBatched
+using cuBLAS: unsafe_strided_batch, handle, cublasZtrsmBatched_64, cublasCtrsmBatched_64
+using cuSOLVER: dense_handle, CuSolverParameters, cusolverDnZpotrfBatched, cusolverDnCpotrfBatched, cusolverDnXsyevBatched_bufferSize, cusolverDnXsyevBatched
 ## (TR) triangular triangular matrix solution batched
 for (fname, elty) in ((:cublasZtrsmBatched_64, :ComplexF64),
                       (:cublasCtrsmBatched_64, :ComplexF32))
