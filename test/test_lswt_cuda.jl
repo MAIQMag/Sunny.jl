@@ -486,7 +486,7 @@ end
 end
 
 
-@testitem "Invariance to spin rotation" begin
+@testitem "Invariance to spin rotation" tags=[:cuda] begin
     using LinearAlgebra, Random
 
     function build_system(R, D1, D2, J, K1, K2, h, g)
