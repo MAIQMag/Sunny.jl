@@ -38,8 +38,8 @@ end
 # XsyevBatched
 function XsyevBatched!(dh, jobz::Char, uplo::Char, n, lda, batch_size, A::StridedCuArray{T, 3}) where {T <: BlasFloat}
     minimum_version = v"11.7.1"
-    CUSOLVER.version() < minimum_version && throw(ErrorException("This operation requires cuSOLVER
-        $(minimum_version) or later. Current cuSOLVER version: $(CUSOLVER.version())."))
+    cuSOLVER.version() < minimum_version && throw(ErrorException("This operation requires cuSOLVER
+        $(minimum_version) or later. Current cuSOLVER version: $(cuSOLVER.version())."))
     R = real(T)
     W = CuMatrix{R}(undef, n, batch_size)
     params = CuSolverParameters()
