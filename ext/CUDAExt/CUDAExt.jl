@@ -4,8 +4,8 @@ using Adapt: Adapt
 using CUDA: CUDA, @cuda, CuArray, CuDynamicSharedArray,
             CuMatrix, CuPtr, CuVector, StridedCuArray, blockDim, blockIdx,
             launch_configuration, threadIdx
-using cuBLAS: unsafe_strided_batch, handle, cublasZtrsmBatched_64, cublasCtrsmBatched_64
-using cuSOLVER: dense_handle, CuSolverParameters, cusolverDnZpotrfBatched, cusolverDnCpotrfBatched, cusolverDnXsyevBatched_bufferSize, cusolverDnXsyevBatched
+using cuBLAS: cuBLAS, unsafe_strided_batch, handle, cublasZtrsmBatched_64, cublasCtrsmBatched_64
+using cuSOLVER: cuSOLVER, dense_handle, CuSolverParameters, cusolverDnZpotrfBatched, cusolverDnCpotrfBatched, cusolverDnXsyevBatched_bufferSize, cusolverDnXsyevBatched
 using Sunny: Sunny, Bond, Crystal, SpinWaveTheory, System, global_position, 
              intensities_bands
 
