@@ -134,7 +134,6 @@ end
 
 function SystemDeviceSUN(host::Sunny.System)
     @assert host.mode == :SUN
-    @assert isnothing(host.ewald)
     original_crystal = CrystalDevice(Sunny.orig_crystal(host))
     mode = mode_to_enum(host)
     @assert mode == SUN

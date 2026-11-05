@@ -26,6 +26,8 @@ QPathDevice(host::Sunny.QPath) = QPathDevice(CUDA.CuVector(host.qs), host.xticks
 
 Sunny.QPath(device::QPathDevice) = Sunny.QPath(Array(device.qs), device.xticks)
 
+Sunny.QPoints(device::QPointsDevice) = Sunny.QPoints(Array(device.qs))
+
 function Sunny.to_device(qpts::Sunny.QPath)
     return QPathDevice(qpts)
 end

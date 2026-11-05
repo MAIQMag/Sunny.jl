@@ -1,8 +1,8 @@
 using LinearAlgebra: BlasFloat, checksquare
 
 using CUDA: unsafe_free!, with_workspaces, findfirst
-using CUDA.CUBLAS: unsafe_strided_batch, handle, cublasZtrsmBatched_64, cublasCtrsmBatched_64
-using CUDA.CUSOLVER: dense_handle, CuSolverParameters, cusolverDnZpotrfBatched, cusolverDnCpotrfBatched, cusolverDnXsyevBatched_bufferSize, cusolverDnXsyevBatched
+using cuBLAS: unsafe_strided_batch, handle, cublasZtrsmBatched_64, cublasCtrsmBatched_64
+using cuSOLVER: dense_handle, CuSolverParameters, cusolverDnZpotrfBatched, cusolverDnCpotrfBatched, cusolverDnXsyevBatched_bufferSize, cusolverDnXsyevBatched
 ## (TR) triangular triangular matrix solution batched
 for (fname, elty) in ((:cublasZtrsmBatched_64, :ComplexF64),
                       (:cublasCtrsmBatched_64, :ComplexF32))
@@ -38,8 +38,8 @@ end
 # XsyevBatched
 function XsyevBatched!(dh, jobz::Char, uplo::Char, n, lda, batch_size, A::StridedCuArray{T, 3}) where {T <: BlasFloat}
     minimum_version = v"11.7.1"
-    CUSOLVER.version() < minimum_version && throw(ErrorException("This operation requires cuSOLVER
-        $(minimum_version) or later. Current cuSOLVER version: $(CUSOLVER.version())."))
+    cuSOLVER.version() < minimum_version && throw(ErrorException("This operation requires cuSOLVER
+        $(minimum_version) or later. Current cuSOLVER version: $(cuSOLVER.version())."))
     R = real(T)
     W = CuMatrix{R}(undef, n, batch_size)
     params = CuSolverParameters()
