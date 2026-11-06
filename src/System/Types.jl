@@ -89,19 +89,41 @@ const rFTPlan = FFTW.rFFTWPlan{Float64, -1, false, 5, UnitRange{Int64}}
 const rBFTPlan = FFTW.rFFTWPlan{ComplexF64, 1, false, 5, UnitRange{Int64}}
 const rIFTPlan = FFTW.AbstractFFTs.ScaledPlan{ComplexF64, rBFTPlan, Float64}
 
+# Precalculated real-space terms to be used in `ewald_interaction_tensor`. This
+# data significantly accelerates spin wave calculations that run over q.
+struct EwaldTensorCache
+    dims        :: NTuple{3, Int}  # Lattice of cells
+    cryst       :: Crystal         # Reference unit cell
+    μ0_μB²      :: Float64         # Strength of dipole-dipole interactions
+    demag       :: Mat3            # Demagnetization factor
+    σ²          :: Float64         # Parameter that splits real/Fourier-space costs
+
+    mmax        :: NTuple{3, Int}  # Grid of Fourier modes
+    kmax²       :: Float64         # Fourier cutoff (inverse length)
+
+    nmax        :: NTuple{3, Int}  # Grid of real-space cells
+    real_terms  :: Array{Vector{Tuple{NTuple{3, Int}, Mat3}}, 5}  # [cell, i, j] -> (shift n, interaction)
+end
+
 struct Ewald
-    μ0_μB²   :: Float64               # Strength of dipole-dipole interactions
-    demag    :: Mat3                  # Demagnetization factor
-    A        :: Array{Mat3, 5}        # Interaction matrices in real-space         [offset+1,i,j]
-    μ        :: Array{Vec3, 4}        # Magnetic moments μ = g s                   [cell,i]
-    ϕ        :: Array{Vec3, 4}        # Cross correlation, ϕ = A⋆μ                 [cell,i]
-    # Space for Fourier transforms; compressed along first index m1
-    FA       :: Array{ComplexF64, 7}  # Transformed interactions F[A]              [α,β,m1,m2,m3,i,j]
-    Fμ       :: Array{ComplexF64, 5}  # Transformed spins F[s]                     [α,m1,m2,m3,i]
-    Fϕ       :: Array{ComplexF64, 5}  # Cross correlation, F[ϕ] = conj(F[A]) F[s]  [α,m1,m2,m3,i]
+    # q-independent pieces for rapidly building interaction tensor A(q)
+    cache    :: EwaldTensorCache
+    # Data in real space
+    A        :: Array{Mat3, 5}     # Interaction tensor          [offset+1,i,j]
+    μ        :: Array{Vec3, 4}     # Magnetic moments μ = -g s   [cell,i]
+    ϕ        :: Array{Vec3, 4}     # Cross correlation, ϕ = A⋆μ  [cell,i]
+    # Real → complex Fourier transforms, compressed along first spatial index
+    FA       :: Array{CMat3, 5}    # rfft(A)
+    Fμ       :: Array{CVec3, 4}    # rfft(μ)
+    Fϕ       :: Array{CVec3, 4}    # rfft(ϕ) = conj(FA) Fμ
+    # Forward and inverse plans
     plan     :: rFTPlan
     ift_plan :: rIFTPlan
 end
+
+# An abstract type to avoid Julia's restriction against circular type
+# dependency. The corresponding concrete type is Entanglement.
+abstract type AbstractEntanglement end
 
 mutable struct System{N}
     const origin           :: Union{Nothing, System{N}} # System for the original chemical cell
@@ -137,6 +159,9 @@ mutable struct System{N}
 
     # Global data
     const rng              :: Random.Xoshiro
+
+    # Optional entanglement metadata
+    entanglement           :: Union{Nothing, AbstractEntanglement}
 end
 
 

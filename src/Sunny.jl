@@ -12,9 +12,10 @@ import Hungarian: hungarian
 import JLD2
 import LineSearches
 import MappedArrays: mappedarray
-import OffsetArrays: OffsetArray
+import OffsetArrays: OffsetArrays, OffsetArray
 import Optim
 import Printf: Printf, @printf, @sprintf
+import ProgressMeter
 import Random: Random, randn!
 import SpecialFunctions: erf, erfc
 import Statistics
@@ -28,6 +29,8 @@ import RowEchelon: rref!
 import Spglib
 
 include("MathBasics.jl")
+include("Threading.jl")
+export load_blas_for_threading
 
 include("Operators/Spin.jl")
 include("Operators/Rotation.jl")
@@ -56,9 +59,6 @@ export Crystal, subcrystal, standardize, lattice_vectors, lattice_params, primit
 include("Units.jl")
 export Units, meV_per_K
 
-include("FormFactor.jl")
-export FormFactor
-
 include("System/Moment.jl")
 include("System/Types.jl")
 include("System/System.jl")
@@ -76,11 +76,11 @@ export Moment, System, Site, clone_system, eachsite, nsites, position_to_site, g
     symmetry_equivalent_bonds, remove_periodicity!, modify_exchange_with_truncated_dipole_dipole!,
     get_param, set_param!, get_params, set_params!, ParamSpec
 
-include("MagneticOrdering.jl")
-export print_wrapped_intensities, suggest_magnetic_supercell
-
 include("Reshaping.jl")
 export reshape_supercell, resize_supercell, repeat_periodically, repeat_periodically_as_spiral
+
+include("Entanglement.jl")
+export entangle_system
 
 include("Integrators.jl")
 export Langevin, ImplicitMidpoint, step!, suggest_timestep
@@ -88,8 +88,14 @@ export Langevin, ImplicitMidpoint, step!, suggest_timestep
 include("Optimization.jl")
 export minimize_energy!
 
+include("MagneticOrdering.jl")
+export print_wrapped_intensities, suggest_magnetic_supercell
+
 include("MCIF.jl")
 export set_dipoles_from_mcif!
+
+include("FormFactor.jl")
+export FormFactor
 
 include("Measurements/MeasureSpec.jl")
 include("Measurements/QPoints.jl")
@@ -128,14 +134,6 @@ export SampledCorrelations, SampledCorrelationsStatic, add_sample!, clone_correl
 include("SCGA/NewtonBacktracking.jl")
 include("SCGA/SCGA.jl")
 export SCGA, magnetic_susceptibility_per_site
-
-include("EntangledUnits/TypesAndAliasing.jl")
-include("EntangledUnits/EntangledUnits.jl")
-include("EntangledUnits/EntangledReshaping.jl")
-include("EntangledUnits/EntangledSpinWaveTheory.jl")
-include("EntangledUnits/EntangledSampledCorrelations.jl")
-# export contract_crystal, EntangledSystem, set_expected_dipoles_of_entangled_system!
-# export EntangledSpinWaveTheory, EntangledSampledCorrelations
 
 include("MonteCarlo/Samplers.jl")
 include("MonteCarlo/BinnedArray.jl")

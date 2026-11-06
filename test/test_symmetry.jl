@@ -393,10 +393,10 @@ end
     S = Sunny.spin_matrices_of_dim(; N)
     Si, Sj = to_product_space(S, S)
 
-    _, _, _, tensordec = Sunny.decompose_general_coupling(Si'*J*Sj, N, N; extract_parts=false)
+    (; tensordec) = Sunny.decompose_general_coupling(Si'*J*Sj, N, N; extract_parts=false)
     @test Sunny.is_coupling_valid(cryst, b, tensordec)
 
-    _, _, _, tensordec = Sunny.decompose_general_coupling(Si'*J_bad*Sj, N, N; extract_parts=false)
+    (; tensordec) = Sunny.decompose_general_coupling(Si'*J_bad*Sj, N, N; extract_parts=false)
     @test !Sunny.is_coupling_valid(cryst, b, tensordec)
 end
 
@@ -404,13 +404,7 @@ end
     using LinearAlgebra
 
     # Test some inferred anisotropy matrices
-    let
-        # This test should also work for S = Inf, but there is a false negative
-        # within second call to `is_anisotropy_valid`. TODO: Create minimized
-        # test for `isapprox` bug and report to DynamicPolynomials repo. Cf.
-        # https://github.com/JuliaAlgebra/DynamicPolynomials.jl/issues/created_by/kbarros
-
-        s = 3
+    for s in (3, Inf)
         k = 6
         i = 1
         cryst = Sunny.diamond_crystal()

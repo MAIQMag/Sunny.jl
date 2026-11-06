@@ -1,6 +1,6 @@
-struct FittingLoss{S}
+struct FittingLoss
     f :: Function
-    sys :: S
+    sys :: System
     labels :: Vector{Symbol}
     hp :: NamedTuple
 end
@@ -94,19 +94,12 @@ function make_loss_fn(f, sys, labels; hp=NamedTuple())
     return FittingLoss(f, sys, labels, hp)
 end
 
-function set_active_labels!(sys::System, labels::Vector{Symbol})
-    sys.active_labels = labels
-    return sys
-end
-
-get_active_labels(sys::System) = sys.active_labels
-
 function (fl::FittingLoss)(vals)
     (; f, sys, labels, hp) = fl
 
     sys = clone_system(sys)
     set_params!(sys, labels, vals)
-    set_active_labels!(sys, labels)
+    sys.active_labels = labels
     try
         if applicable(f, sys, hp)
             return f(sys, hp)
@@ -125,7 +118,7 @@ function CRC.rrule(rc::CRC.RuleConfig, fl::FittingLoss, vals)
 
     sys = clone_system(sys)
     set_params!(sys, labels, vals)
-    set_active_labels!(sys, labels)
+    sys.active_labels = labels
     (L, f_pb) = try
         if applicable(f, sys, hp)
             CRC.rrule_via_ad(rc, f, sys, hp)
@@ -484,14 +477,16 @@ function bands_transport_loss(E, E0, X0; σ, ϵ, maxiter)
     # occupations γ at large C.
     C_compress = f.(C_shift)
 
-    # M×(K+1) kernel for use in optimal transport. The final column is a "sink"
-    # to absorb unused modes in the case of M > K. Its numerical value is
-    # arbitrary (no effect on γ).
-    C = hcat(C_compress, zeros(M))
-
     # Use the Sinkhorn algorithm to fractionally assign modes to peaks.
-    μ = ones(M)              # mass for SWT modes
-    ν = vcat(ones(K), M - K) # mass for labeled peaks (leftover goes to sink)
+    μ = ones(M) # mass for SWT modes
+    ν = ones(K) # mass for labeled peaks
+    C = C_compress
+    # If M = K, then every mode will be assigned to a peak. If M > K, then we
+    # need a "sink" column of C to absorb the M - K unassigned modes.
+    if M > K
+        C = hcat(C, zeros(M)) # uniform cost for mode assignment to sink
+        ν = vcat(ν, M - K)    # leftover mass to be assigned to sink
+    end
     γ = sinkhorn_simple(μ, ν, C, ϵ; maxiter)
 
     # Calculate the squared error for the smooth assignments γ. It is essential
@@ -608,9 +603,10 @@ end
 """
     uncertainty_matrix(loss, x)
 
-Returns the uncertainty matrix ``U = 2L(\\hat 𝐱) H(\\hat 𝐱)^{-1}`` at the loss
-minimizer ``\\hat 𝐱``. Uses finite differences to approximate the Hessian ``H =
-∇ ∇ L``.
+Returns the uncertainty matrix ``U = 2L(\\hat 𝐱) H(\\hat 𝐱)^{-1}`` at the
+minimizer ``\\hat 𝐱`` of the loss ``L``. The Hessian ``H = ∇ ∇ L`` is
+approximated using finite differences. Note that ``U`` is invariant to the
+overall loss scale.
 
 If ``L`` is a least-squares objective with a Gaussian noise model
 interpretation, then ``U/ν`` estimates the covariance of fitted parameters
@@ -622,51 +618,25 @@ parameters ``p``. Statistical error bars follow,
 \\mathrm{Std}(\\hat x_i) ≈ \\sqrt{U_{ii} / ν}.
 ```
 
-Aside from statistics, the matrix ``U`` also admits a purely geometric
-interpretation. Consider a quadratic expansion of ``L(𝐱)`` about ``\\hat 𝐱``.
-Perturbations ``𝐱 - \\hat 𝐱`` that increase the loss by a factor of 2 satisfy
-``\\Delta 𝐱^T U^{-1} \\Delta 𝐱 ≈ 1``. Thus ``U^{-1}`` defines an ellipsoid
-characterizing the shape and scale of the local loss basin.
+This estimator ignores systematic modeling errors. Frequently, however, fit
+quality may actually be limited by, e.g., incompleteness of the Hamiltonian
+ansatz, imperfect global optimization of the model parameters, or intrinsic
+inaccuracies of the calculation method itself.
 
-We define the _**misfit tolerance**_ ``\\sqrt{𝐧^T U 𝐧 / 2}`` along any
-normalized direction ``𝐧`` in parameter space. In particular, the misfit
-tolerance for ``\\hat x_i`` is
+When systematic errors dominate, a useful quantity is the "misfit tolerance",
 
 ```math
 δ\\hat x_i = \\sqrt{U_{ii} / 2}.
 ```
 
-Geometrically, ``δ\\hat x_i`` measures the scale over which ``x_i`` can vary
-before the loss grows by about 50%, while allowing correlated adjustments of the
-remaining parameters. The misfit tolerance is not a statistical quantity, but
-rather suggests a scale for admissible parameter variation that may become
-relevant when systematic modeling errors are large.
+Notably, this expression does _not_ typically vanish in the large-data limit,
+``ν → ∞``. Geometrically, ``δ\\hat x_i`` measures the scale over which ``x_i``
+can vary before the loss grows by about 50% (while allowing correlated
+adjustments of the remaining parameters). The misfit tolerance is not a
+statistical quantity, but rather suggests a scale for admissible parameter
+variation based on the loss function geometry.
 
-!!! tip "Comparing statistical uncertainty and misfit tolerance"
-
-    Observe that the misfit tolerance ``δ\\hat x_i`` has the same form as
-    ``\\mathrm{Std}(\\hat x_i)``, but is significantly larger due to the missing
-    ``ν^{-1/2}`` scaling factor.
-
-    If noise in the data is the main limitation to overall fit quality, then
-    ``\\mathrm{Std}(\\hat x_i)`` is the appropriate uncertainty measure. A signature
-    of this regime is that the residuals ``y_i-f_i(\\hat 𝐱)`` show no obvious
-    structure after accounting for known noise correlations.
-
-    Often, however, statistical noise is effectively small relative to systematic
-    modeling errors of various forms. For example, the fit could actually be limited
-    by incompleteness of the Hamiltonian ansatz, imperfect global optimization of
-    the Hamiltonian parameters, or intrinsic inaccuracies of the calculation method
-    itself.
-
-    When the observed loss is dominated by systematic errors, the misfit tolerance
-    ``δ\\hat x_i`` may provide useful information; it defines a parameter range that
-    allows for about 50% additional growth of the loss. Whereas statistical error
-    bars decay like ``ν^{-1/2} \\sim N^{-1/2}``, the misfit tolerance ``δ\\hat x_i``
-    will typically _not_ vanish in the large-data limit – even for a correctly
-    specified model!
-
-!!! tip "Derivation of the covariance estimator"
+!!! tip "Derivation of the statistical covariance estimator"
 
     Suppose the loss is a sum of squared errors with arbitrary scale ``c``,
 
@@ -712,7 +682,7 @@ CRC.zero_tangent(t::SystemTangent) = SystemTangent(zero(t.vals))
 CRC.unthunk(t::SystemTangent) = t
 
 function CRC.ProjectTo(sys::System)
-    n = length(get_active_labels(sys))
+    n = length(sys.active_labels)
     function project(Δsys)
         Δsys = CRC.unthunk(Δsys)
         if Δsys isa CRC.NoTangent || Δsys isa CRC.AbstractZero
@@ -734,7 +704,7 @@ end
 function with_params(sys::System, labels::Vector{Symbol}, vals::Vector{<: Real})
     sys = clone_system(sys)
     set_params!(sys, labels, vals)
-    set_active_labels!(sys, labels)
+    sys.active_labels = labels
     return sys
 end
 function CRC.rrule(::typeof(with_params), sys::System, labels, vals)

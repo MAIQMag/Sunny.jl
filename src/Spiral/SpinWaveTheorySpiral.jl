@@ -68,7 +68,7 @@ function fourier_bilinear_interaction!(Jq, swt::SpinWaveTheory, q_reshaped)
             @assert i == bond.i
             j = bond.j
 
-            J_lab = Rs[i] * Mat3(bilin*I) * Rs[j]' # Undo transformation in `swt_data`
+            J_lab = Rs[i] * Mat3(bilin*I) * Rs[j]' # Undo transformation in `swt_data!`
             J = exp(-2π * im * dot(q_reshaped, bond.n)) * J_lab
             Jq[i, j] += J
             Jq[j, i] += J'
@@ -76,8 +76,8 @@ function fourier_bilinear_interaction!(Jq, swt::SpinWaveTheory, q_reshaped)
     end
 
     if !isnothing(sys.ewald)
-        (; demag, μ0_μB²) = sys.ewald
-        Aq = precompute_dipole_ewald_at_wavevector(sys.crystal, (1,1,1), demag, -q_reshaped) * μ0_μB²
+        (; cache) = sys.ewald
+        Aq = ewald_interaction_tensor(cache, -q_reshaped)
         Aq = reshape(Aq, Na, Na)
         for i in 1:Na, j in 1:Na
             Jq[i, j] += gs[i]' * Aq[i, j] * gs[j]
@@ -252,16 +252,16 @@ function gs_as_scalar(sys::System, measure::MeasureSpec)
 end
 
 
-function intensities_bands(sswt::SpinWaveTheorySpiral, qpts; kT=0) # TODO: branch=nothing
+function intensities_bands(sswt::SpinWaveTheorySpiral, qpts; kT=0, threaded=false) # TODO: branch=nothing
+    threaded && error("Option `threaded=true` not yet supported for SpinWaveTheorySpiral.")
     (; swt, k_case, axis) = sswt
     (; sys, data, measure) = swt
     (; local_rotations, sqrtS) = data
 
-    isempty(measure.observables) && error("No observables! Construct SpinWaveTheorySpiral with a `measure` argument.")
+    num_observables(measure) == 0 && error("No observables! Construct SpinWaveTheorySpiral with a `measure` argument.")
 
     qpts = convert(AbstractQPoints, qpts)
     cryst = orig_crystal(sys)
-    rs_global = global_positions(sys)
 
     # Number of atoms in magnetic cell
     @assert sys.dims == (1,1,1)
@@ -287,12 +287,12 @@ function intensities_bands(sswt::SpinWaveTheorySpiral, qpts; kT=0) # TODO: branc
     disp_flat = reshape(disp, 3L, Nq)
     intensity_flat = reshape(intensity, 3L, Nq)
     S = zeros(CMat3, L, 3)
-    Avec_pref = zeros(ComplexF64, Na)
 
     # If g-tensors are included in observables, they must be scalar. Precompute.
     gs = gs_as_scalar(sys, measure)
 
     for (iq, q) in enumerate(qpts.qs)
+        q_reshaped = to_reshaped_rlu(sys, q)
         q_global = cryst.recipvecs * q
 
         for branch in 1:3   # (q-k, q, q+k) modes for propagation wavevector k
@@ -301,19 +301,14 @@ function intensities_bands(sswt::SpinWaveTheorySpiral, qpts; kT=0) # TODO: branc
             view(T, :, :, branch) .= T0
         end
 
-        for i in 1:Na
-            ff = get_swt_formfactor(measure, 1, i)
-            Avec_pref[i] = exp(- im * dot(q_global, rs_global[i]))
-            Avec_pref[i] *= compute_form_factor(ff, norm2(q_global))
-        end
-
         for branch in 1:3, band in 1:L
-            Avec = zero(CVec{3})
+            Avec = zero(CVec3)
             v = reshape(view(T, :, band, branch), Na, 2)
             for i in 1:Na
+                pref = observable_prefactor(measure, 1, i, q_reshaped, q_global, sys)
                 R = local_rotations[i]
                 displacement = R * SA[v[i, 2] + v[i, 1], im * (v[i, 2] - v[i, 1]), 0.0]
-                Avec += Avec_pref[i] * (sqrtS[i]/sqrt(2)) * gs[i] * displacement
+                Avec += conj(pref) * (sqrtS[i] / √2) * gs[i] * displacement
             end
             S[band, branch] = Avec * Avec' / Ncells
         end
@@ -338,10 +333,10 @@ function intensities_bands(sswt::SpinWaveTheorySpiral, qpts; kT=0) # TODO: branc
         end
 
         for branch in 1:3, band in 1:L
-            corrbuf = map(measure.corr_pairs) do (α, β)
+            corr = map(measure.corr_pairs) do (α, β)
                 S[band, branch][α, β]
             end
-            intensity[band, branch, iq] = thermal_prefactor(disp[band, branch, iq]; kT) * measure.combiner(q_global, corrbuf)
+            intensity[band, branch, iq] = thermal_prefactor(disp[band, branch, iq]; kT) * measure.combiner(q_global, corr)
         end
 
         # Dispersion in descending order

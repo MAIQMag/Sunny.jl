@@ -40,7 +40,7 @@ function swt_hamiltonian_dipole!(H::Matrix{ComplexF64}, swt::SpinWaveTheory, q_r
             @assert i == bond.i
             j = bond.j
 
-            phase = exp(2π*im * dot(q_reshaped, bond.n)) # Phase associated with periodic wrapping
+            phase = cis(2π * dot(q_reshaped, bond.n)) # Phase associated with periodic wrapping
 
             si = sqrtS[i]^2
             sj = sqrtS[j]^2
@@ -100,15 +100,15 @@ function swt_hamiltonian_dipole!(H::Matrix{ComplexF64}, swt::SpinWaveTheory, q_r
 
     # Add long-range dipole-dipole
     if !isnothing(sys.ewald)
-        (; demag, μ0_μB², A) = sys.ewald
+        (; cache, A) = sys.ewald
         Rs = local_rotations
 
-        # Interaction matrix for wavevector (0,0,0). It could be recalculated as:
-        # precompute_dipole_ewald(sys.crystal, (1,1,1), demag) * μ0_μB²
+        # Interaction matrix for wavevector (0,0,0), equivalently:
+        # real.(ewald_interaction_tensor(cache, zero(Vec3)))
         A0 = reshape(A, L, L)
 
         # Interaction matrix for wavevector q
-        Aq = precompute_dipole_ewald_at_wavevector(sys.crystal, (1,1,1), demag, q_reshaped) * μ0_μB²
+        Aq = ewald_interaction_tensor(cache, q_reshaped)
         Aq = reshape(Aq, L, L)
 
         # Loop over sublattice pairs
@@ -122,7 +122,7 @@ function swt_hamiltonian_dipole!(H::Matrix{ComplexF64}, swt::SpinWaveTheory, q_r
             # Perform same transformation as appears in usual bilinear exchange.
             # Rⱼ denotes a rotation from ẑ to the ground state dipole Sⱼ.
             J = sqrtS[i]*sqrtS[j] * Rs[i]' * J * Rs[j]
-            J0 = sqrtS[i]*sqrtS[j] * Rs[i]' * J0 * Rs[j]
+            J0zz = (Rs[i]' * J0 * Rs[j])[3, 3]
 
             # Interactions for Jˣˣ, Jʸʸ, Jˣʸ, and Jʸˣ at wavevector q.
             Q⁻ = 0.5 * (J[1, 1] + J[2, 2] - im*(J[1, 2] - J[2, 1]))
@@ -139,11 +139,13 @@ function swt_hamiltonian_dipole!(H::Matrix{ComplexF64}, swt::SpinWaveTheory, q_r
             H12[i, j] += P⁺
             H12[j, i] += conj(P⁻)
 
-            # Interactions for Jᶻᶻ at wavevector (0,0,0).
-            H11[i, i] -= J0[3, 3]
-            H11[j, j] -= J0[3, 3]
-            H22[i, i] -= J0[3, 3]
-            H22[j, j] -= J0[3, 3]
+            # Interactions for Jᶻᶻ at wavevector (0,0,0). Each site feels the
+            # molecular field of the other's ordered moment.
+            si, sj = sqrtS[i]^2, sqrtS[j]^2
+            H11[i, i] -= sj * J0zz
+            H11[j, j] -= si * J0zz
+            H22[i, i] -= sj * J0zz
+            H22[j, j] -= si * J0zz
         end
     end
 

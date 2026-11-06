@@ -142,6 +142,15 @@ end
         q = [0.8, 0.6, 0.1]
         res = intensities_bands(swt, [q])
 
+        # Threading over many wavevectors reproduces the serial calculation
+        qs = [rand(3) for _ in 1:50]
+        kernel = lorentzian(fwhm=1.0)
+        energies = range(0, 10, 20)
+        res1 = intensities(swt, qs; energies, kernel)
+        msg = r"^OpenBLAS scales poorly with `threaded=true`"
+        res2 = @test_logs (:warn, msg) match_mode=:any intensities(swt, qs; energies, kernel, threaded=true)
+        @test res1.data == res2.data
+
         return filter(>(1e-12), abs.(res.data))
     end
 
@@ -330,6 +339,21 @@ end
 
         @test disp1 ≈ [1.3236778041378718, 0.9206655245623444]
         @test disp2 ≈ [0.9206655245623366]
+    end
+
+    # Unequal spin magnitudes. Each site feels the molecular field of the other
+    # site's ordered moment, which scales with that moment's own magnitude.
+    begin
+        cryst = Crystal(lattice_vectors(1, 1.2, 1.4, 90, 90, 90), [[0, 0, 0], [1/2, 1/2, 1/2]], 1)
+        sys = System(cryst, [1 => Moment(s=1, g=2), 2 => Moment(s=3/2, g=2)], :dipole_uncorrected)
+        set_exchange!(sys, 1.0, Bond(1, 2, [0, 0, 0]))
+        set_exchange!(sys, -0.3, Bond(1, 1, [1, 0, 0]))
+        enable_dipole_dipole!(sys, 0.05)
+        set_dipole!(sys, [1, 0, 0], (1, 1, 1, 1))
+        set_dipole!(sys, [-1, 0, 0], (1, 1, 1, 2))
+        q = [0.1, 0.2, 0.3]
+        disp1 = dispersion(SpinWaveTheory(sys; measure=nothing), [q])
+        @test disp1 ≈ [1.048088346572452, 0.3483185617088442]
     end
 end
 
@@ -584,7 +608,8 @@ end
 
         S1i, S1j = Sunny.to_product_space(S1, S1)
         S2i, S2j = Sunny.to_product_space(S2, S2)
-        scalar, bilin, biquad, tensordec = Sunny.decompose_general_coupling(J′*(S1i' * S1j + S2i' * S2j), 4, 4; extract_parts=fast)
+        op = J′*(S1i' * S1j + S2i' * S2j)
+        (; scalar, bilin, biquad, tensordec) = Sunny.decompose_general_coupling(op, 4, 4; extract_parts=fast)
         Sunny.set_pair_coupling_aux!(sys, scalar, Sunny.Mat3(I)*bilin, biquad, tensordec, Bond(1, 1, [-1,0,0]), nothing)
 
         return sys, cryst
@@ -599,10 +624,12 @@ end
         1/√2*(S1[2] - S2[2]),
         1/√2*(S1[3] - S2[3]),
     ])
-    observables = repeat(observables0, 1, size(eachsite(sys))...)
+    # Layout is (nobs × d1 × d2 × d3 × nunits × nparts); here nparts=1.
+    operators = repeat(reshape(observables0, 3, 1, 1, 1, 1, 1), 1, size(eachsite(sys))..., 1)
     corr_pairs = [(3,3), (2,2), (1,1)]
     combiner = (_, data) -> real(sum(data))
-    measure = Sunny.MeasureSpec(observables, corr_pairs, combiner, [one(FormFactor)])
+    formfactors = fill(one(FormFactor), 3, 1, 1)
+    measure = Sunny.MeasureSpec(operators, corr_pairs, combiner, formfactors)
 
     # Set up SpinWaveTheory
     randomize_spins!(sys)

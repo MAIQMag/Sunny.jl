@@ -1,10 +1,28 @@
 # Release Notes
 
+## v0.10.0
+(In development)
+
+* Enhancements to simulations with entangled units. The new
+  [`entangle_system`](@ref) function is officially supported, offers improved
+  integration with other Sunny features, and in some cases runs significantly
+  faster ([#496](@ref)).
+* New [Tutorial 12](@ref "12. Fitting to the dispersion of a dimerized magnet")
+  illustrates fitting of the dimerized magnet Ba₃Mn₂O₈ to intensity bands data.
+* Ewald summation for spin wave theory is greatly accelerated ([#514](@ref)).
+  Correctness fix when sites have different spin magnitudes ([#521](@ref)).
+* Energy kernel broadening supported in [`SampledCorrelations`](@ref)
+  ([#507](@ref)).
+* One-dimensional paths supported in [`q_space_grid`](@ref). Labeling of plot
+  axes in 1D and 2D is clarified ([#516](@ref)).
+
 ## v0.9.2
 (Jul 13, 2026)
 
 * Bug fixes and improvements to experimental entangled units feature
   ([#494](@ref)).
+
+* Bug fixes and improvements to entangled units ([#494](@ref)).
 
 ## v0.9.1
 (Apr 25, 2026)

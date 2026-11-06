@@ -22,20 +22,19 @@
 
         # Test dipole -> ket -> dipole round trip
         n = s * normalize(randn(Sunny.Vec3))
-        Z = Sunny.ket_from_dipole(n, Val(N))
+        Z = Sunny.ket_from_dipole(n, Val{N}())
         @test Sunny.expected_spin(Z) ≈ n
 
         # Test time reversal operator
         Z = randn(Sunny.CVec{N})
-        @test Sunny.flip_ket(Z) ≈ exp(-im*π*S[2]) * conj(Z)
+        @test Sunny.time_reverse_irrep_ket(Z) ≈ exp(-im*π*S[2]) * conj(Z)
     end
 
     # Test action of mul_spin_matrices(B, Z)
     for N = 4:6
-        Λ = randn(ComplexF64, N, N)
         B = randn(Sunny.Vec3)
         Z = randn(Sunny.CVec{N})
-        @test Sunny.mul_spin_matrices(Λ, B, Z) ≈ (Λ + B'*spin_matrices((N-1)/2)) * Z
+        @test Sunny.mul_spin_matrices(B, Z) ≈ B' * spin_matrices((N-1)/2) * Z
     end
 end
 
@@ -209,19 +208,12 @@ end
         for s in (3, Inf)
             O = stevens_matrices(s)
 
-            # Cannot use [O[2, q] for q in 2:-1:-2] because:
-            # https://github.com/JuliaAlgebra/DynamicPolynomials.jl/issues/149
-            Q = [O[2, 2], O[2, 1], O[2, 0], O[2, -1], O[2, -2]]
+            Q = [O[2, q] for q in 2:-1:-2]
 
             V = Sunny.operator_for_stevens_rotation(2, R)
             A = V * Q
             A′ = rotate_operator.(Q, Ref(R))
-
-            # Cannot use A ≈ A′ because:
-            # https://github.com/JuliaAlgebra/DynamicPolynomials.jl/issues/148
-            for (Aq, Aq′) in zip(A, A′)
-                @test Aq ≈ Aq′
-            end
+            @test all(A .≈ A′)
         end
     end
 

@@ -5,11 +5,20 @@ const Mat3 = SMatrix{3, 3, Float64, 9}
 const Mat5 = SMatrix{5, 5, Float64, 25}
 const CMat3 = SMatrix{3, 3, ComplexF64, 9}
 const CVec{N} = SVector{N, ComplexF64}
+const CVec3 = CVec{3}
 const HermitianC64 = Hermitian{ComplexF64, Matrix{ComplexF64}}
 
 # Convenience for Kronecker-δ syntax. Note that boolean (false, true) result
 # acts as multiplicative (0, 1).
 @inline δ(x, y) = (x==y)
+
+# Square matrix times SVector without allocating. Unrolled via @generated so
+# that the compiler has freedom to rearrange order of summation. Beats
+# SMatrix{N, N}(H) * v in both run-time and compile-time benchmarks.
+@generated function mul_svec(H::AbstractMatrix, v::SVector{N}) where N
+    rows = [:( +($([:(H[$i,$j] * v[$j]) for j in 1:N]...)) ) for i in 1:N]
+    return :(SVector{N}($(rows...)))
+end
 
 # Calculates norm(a)^2 without allocating
 norm2(a::Number) = abs2(a)
@@ -89,6 +98,13 @@ function ql(A)
     QF = reverse!(Matrix(Q); dims=2)
     FRF = reverse!(R)
     return (; Q=QF, L=FRF)
+end
+
+# Perform the SVD decomposition A = U Σ Vᵀ and return an iterator over the
+# principal triples (σₖ, U[:,k], V[:,k]), dropping components where σₖ < atol.
+function svd_iterator(A; atol)
+    F = svd(A)
+    return ((σ, u, v) for (σ, u, v) in zip(F.S, eachcol(F.U), eachcol(F.V)) if σ > atol)
 end
 
 # flatten_to_vec([1, ([2, 3], 4, [5, 6])]) == [1, 2, 3, 4, 5, 6]
