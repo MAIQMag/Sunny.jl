@@ -1,24 +1,24 @@
 struct SWTDataDipoleDevice{TVecRot, TArrObs, TVecCoef, TVecS}
     local_rotations       :: TVecRot  # Rotations from global to quantization frame
-    observables_localized :: TArrObs
+    observables           :: TArrObs  # Observables rotated to local frame (nobs × nsites)
     stevens_coefs         :: TVecCoef # Rotated onsite coupling as Steven expansion
     sqrtS                 :: TVecS    # Square root of spin magnitudes
 end
 
-SWTDataDipoleDevice(host::Sunny.SWTDataDipole) = SWTDataDipoleDevice(CUDA.CuVector(host.local_rotations), CUDA.CuArray(host.observables_localized), CUDA.CuVector(host.stevens_coefs), CUDA.CuVector(host.sqrtS))
+SWTDataDipoleDevice(host::Sunny.SWTDataDipole) = SWTDataDipoleDevice(CUDA.CuVector(host.local_rotations), CUDA.CuArray(host.observables), CUDA.CuVector(host.stevens_coefs), CUDA.CuVector(host.sqrtS))
 
 function Adapt.adapt_structure(to, data::SWTDataDipoleDevice)
     local_rotations = Adapt.adapt_structure(to, data.local_rotations)
-    observables_localized = Adapt.adapt_structure(to, data.observables_localized)
+    observables = Adapt.adapt_structure(to, data.observables)
     stevens_coefs = Adapt.adapt_structure(to, data.stevens_coefs)
     sqrtS = Adapt.adapt_structure(to, data.sqrtS)
-    SWTDataDipoleDevice(local_rotations, observables_localized, stevens_coefs, sqrtS)
+    SWTDataDipoleDevice(local_rotations, observables, stevens_coefs, sqrtS)
 end
 
 struct SWTDataSUNDevice{TVecRot, TArrObs, TVecS}
     local_unitaries       :: TVecRot # Transformations from global to quantization frame
-    observables_localized :: TArrObs # Observables rotated to local frame (nobs × nsites)
-    spins_localized       :: TVecS   # Spins rotated to local frame (3 × nsites)
+    observables :: TArrObs # Observables rotated to local frame (nobs × nsites)
+    spin_ops       :: TVecS   # Spins rotated to local frame (3 × nsites)
 end
 
 function SWTDataSUNDevice(host::Sunny.SWTDataSUN)
@@ -29,22 +29,22 @@ function SWTDataSUNDevice(host::Sunny.SWTDataSUN)
     end
     unitaries_d = CuArray(unitaries_h)
 
-    inner_size = size(host.observables_localized[begin])
-    outer_size = size(host.observables_localized)
+    inner_size = size(host.observables[begin])
+    outer_size = size(host.observables)
     observables_h = Array{ComplexF64}(undef, inner_size..., outer_size...)
     for j in 1:outer_size[2]
         for i in 1:outer_size[1]
-            view(observables_h, :, :, i, j) .= host.observables_localized[i,j]
+            view(observables_h, :, :, i, j) .= host.observables[i,j]
         end
     end
     observables_d = CuArray(observables_h)
 
-    inner_size = size(host.spins_localized[begin])
-    outer_size = size(host.spins_localized)
+    inner_size = size(host.spin_ops[begin])
+    outer_size = size(host.spin_ops)
     spins_h = Array{ComplexF64}(undef, inner_size..., outer_size...)
     for j in 1:outer_size[2]
         for i in 1:outer_size[1]
-            view(spins_h, :, :, i, j) .= host.spins_localized[i,j]
+            view(spins_h, :, :, i, j) .= host.spin_ops[i,j]
         end
     end
     spins_d = CuArray(spins_h)
@@ -54,9 +54,9 @@ end
 
 function Adapt.adapt_structure(to, data::SWTDataSUNDevice)
     local_unitaries = Adapt.adapt_structure(to, data.local_unitaries)
-    observables_localized = Adapt.adapt_structure(to, data.observables_localized)
-    spins_localized = Adapt.adapt_structure(to, data.spins_localized)
-    SWTDataSUNDevice(local_unitaries, observables_localized, spins_localized)
+    observables = Adapt.adapt_structure(to, data.observables)
+    spin_ops = Adapt.adapt_structure(to, data.spin_ops)
+    SWTDataSUNDevice(local_unitaries, observables, spin_ops)
 end
 
 struct SpinWaveTheoryDevice{TSys, TData, TMeasure} <: Sunny.AbstractSpinWaveTheory

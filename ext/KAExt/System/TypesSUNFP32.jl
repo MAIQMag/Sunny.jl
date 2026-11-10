@@ -173,3 +173,4 @@ function Adapt.adapt_structure(to, sys::SystemDeviceSUNF32KA)
 end
 
 @inline Sunny.natoms(sys::SystemDeviceSUNF32KA) = sys.Na
+Sunny.nsites(sys::SystemDeviceSUNF32KA) = length(eachsite(sys))

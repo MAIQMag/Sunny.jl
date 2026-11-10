@@ -182,7 +182,7 @@ function intensities_lanczos_device_batched_ka!(data, swt_kry_d::SpinWaveTheoryK
 
     if sys.mode == :SUN
         let
-            (; observables_localized) = swt.data::Sunny.SWTDataSUN
+            (; observables) = swt.data::Sunny.SWTDataSUN
             N_hilbert = sys.Ns[1]
             for iq in 1:Nq
                 q        = qpts.qs[iq]
@@ -197,7 +197,7 @@ function intensities_lanczos_device_batched_ka!(data, swt_kry_d::SpinWaveTheoryK
                 for ξ in 1:Nobs
                     c = (iq - 1) * Nobs + ξ
                     for i in 1:Na
-                        O = observables_localized[ξ, i]
+                        O = observables[ξ, i]
                         for f in 1:Nf
                             l = f + (i - 1) * Nf
                             u_host_per_chain[l,   c] = Avec_pref[i] * O[f, N_hilbert]
@@ -209,7 +209,7 @@ function intensities_lanczos_device_batched_ka!(data, swt_kry_d::SpinWaveTheoryK
         end
     else
         let
-            (; sqrtS, observables_localized) = swt.data::Sunny.SWTDataDipole
+            (; sqrtS, observables) = swt.data::Sunny.SWTDataDipole
             for iq in 1:Nq
                 q          = qpts.qs[iq]
                 q_reshaped = q_reshaped_host[iq]
@@ -223,7 +223,7 @@ function intensities_lanczos_device_batched_ka!(data, swt_kry_d::SpinWaveTheoryK
                 for ξ in 1:Nobs
                     c = (iq - 1) * Nobs + ξ
                     for i in 1:Na
-                        O = observables_localized[ξ, i]
+                        O = observables[ξ, i]
                         u_host_per_chain[i,   c] = Avec_pref[i] * (sqrtS[i] / √2) * (O[1] + im*O[2])
                         u_host_per_chain[i+L, c] = Avec_pref[i] * (sqrtS[i] / √2) * (O[1] - im*O[2])
                     end
@@ -457,7 +457,7 @@ function intensities_static_device_batched_ka!(data, swt_kry_d::SpinWaveTheoryKP
 
     if sys.mode == :SUN
         let
-            (; observables_localized) = swt.data::Sunny.SWTDataSUN
+            (; observables) = swt.data::Sunny.SWTDataSUN
             N_hilbert = sys.Ns[1]
             for iq in 1:Nq
                 q        = qpts.qs[iq]
@@ -472,7 +472,7 @@ function intensities_static_device_batched_ka!(data, swt_kry_d::SpinWaveTheoryKP
                 for ξ in 1:Nobs
                     c = (iq - 1) * Nobs + ξ
                     for i in 1:Na
-                        O = observables_localized[ξ, i]
+                        O = observables[ξ, i]
                         for f in 1:Nf
                             l = f + (i - 1) * Nf
                             u_host_per_chain[l,   c] = Avec_pref[i] * O[f, N_hilbert]
@@ -484,7 +484,7 @@ function intensities_static_device_batched_ka!(data, swt_kry_d::SpinWaveTheoryKP
         end
     else
         let
-            (; sqrtS, observables_localized) = swt.data::Sunny.SWTDataDipole
+            (; sqrtS, observables) = swt.data::Sunny.SWTDataDipole
             for iq in 1:Nq
                 q          = qpts.qs[iq]
                 q_reshaped = q_reshaped_host[iq]
@@ -498,7 +498,7 @@ function intensities_static_device_batched_ka!(data, swt_kry_d::SpinWaveTheoryKP
                 for ξ in 1:Nobs
                     c = (iq - 1) * Nobs + ξ
                     for i in 1:Na
-                        O = observables_localized[ξ, i]
+                        O = observables[ξ, i]
                         u_host_per_chain[i,   c] = Avec_pref[i] * (sqrtS[i] / √2) * (O[1] + im*O[2])
                         u_host_per_chain[i+L, c] = Avec_pref[i] * (sqrtS[i] / √2) * (O[1] - im*O[2])
                     end

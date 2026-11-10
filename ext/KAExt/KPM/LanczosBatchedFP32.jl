@@ -577,60 +577,12 @@ function intensities_lanczos_device_batched_fp32_ka!(data, swt_kry_d::SpinWaveTh
     u_host_per_chain = zeros(ComplexF64, twoL, N_chains)
     Avec_pref = zeros(ComplexF64, Na)
 
-    if sys.mode == :SUN
 
-        let
-            (; observables_localized) = swt.data::Sunny.SWTDataSUN
-            N_hilbert = sys.Ns[1]
-            for iq in 1:Nq
-                q        = qpts.qs[iq]
-                q_r      = q_reshaped_host[iq]
-                q_global = cryst.recipvecs * q
-                for i in 1:Na
-                    r  = sys.crystal.positions[i]
-                    ff = Sunny.get_swt_formfactor(measure, 1, i)
-                    Avec_pref[i]  = exp(2π*im * dot(q_r, r))
-                    Avec_pref[i] *= Sunny.compute_form_factor(ff, Sunny.norm2(q_global))
-                end
-                for ξ in 1:Nobs
-                    c = (iq - 1) * Nobs + ξ
-                    for i in 1:Na
-                        O = observables_localized[ξ, i]
-                        for f in 1:Nf
-                            l = f + (i - 1) * Nf
-                            u_host_per_chain[l,   c] = Avec_pref[i] * O[f, N_hilbert]
-                            u_host_per_chain[l+L, c] = Avec_pref[i] * O[N_hilbert, f]
-                        end
-                    end
-                end
-            end
-        end
-    else
-
-        let
-            (; sqrtS, observables_localized) = swt.data::Sunny.SWTDataDipole
-            for iq in 1:Nq
-                q = qpts.qs[iq]
-                q_reshaped = q_reshaped_host[iq]
-                q_global = cryst.recipvecs * q
-
-                for i in 1:Na
-                    r = sys.crystal.positions[i]
-                    ff = Sunny.get_swt_formfactor(measure, 1, i)
-                    Avec_pref[i] = exp(2π*im * dot(q_reshaped, r))
-                    Avec_pref[i] *= Sunny.compute_form_factor(ff, Sunny.norm2(q_global))
-                end
-
-                for ξ in 1:Nobs
-                    c = (iq - 1) * Nobs + ξ
-                    for i in 1:Na
-                        O = observables_localized[ξ, i]
-                        u_host_per_chain[i,   c] = Avec_pref[i] * (sqrtS[i] / √2) * (O[1] + im*O[2])
-                        u_host_per_chain[i+L, c] = Avec_pref[i] * (sqrtS[i] / √2) * (O[1] - im*O[2])
-                    end
-                end
-            end
-        end
+    for iq in 1:Nq
+        q = qpts.qs[iq]
+        q_reshaped = q_reshaped_host[iq]
+        q_global = cryst.recipvecs * q
+        set_swt_observable_vectors!(u_host_per_chain, swt_kry_d.swt_d, q_reshaped, q_global)
     end
 
     chain_skip = falses(N_chains)

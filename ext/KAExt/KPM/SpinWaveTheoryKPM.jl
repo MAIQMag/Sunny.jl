@@ -125,9 +125,9 @@ function intensities_lanczos_device_ka!(data, swt_kry_d::SpinWaveTheoryKPMDevice
 
         @assert sys.mode in (:dipole, :dipole_uncorrected) "GPU device path is dipole-only"
         let
-            (; sqrtS, observables_localized) = swt.data::Sunny.SWTDataDipole
+            (; sqrtS, observables) = swt.data::Sunny.SWTDataDipole
             for μ in 1:Nobs, i in 1:Na
-                O = observables_localized[μ, i]
+                O = observables[μ, i]
                 u_host[i,   μ] = Avec_pref[i] * (sqrtS[i] / √2) * (O[1] + im*O[2])
                 u_host[i+L, μ] = Avec_pref[i] * (sqrtS[i] / √2) * (O[1] - im*O[2])
             end

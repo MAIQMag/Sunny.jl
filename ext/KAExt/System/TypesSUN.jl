@@ -81,3 +81,4 @@ function Adapt.adapt_structure(to, sys::SystemDeviceSUNKA)
 end
 
 @inline Sunny.natoms(sys::SystemDeviceSUNKA) = Sunny.natoms(sys.crystal)
+Sunny.nsites(sys::SystemDeviceSUNKA) = length(eachsite(sys))

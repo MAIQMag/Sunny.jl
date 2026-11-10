@@ -78,7 +78,7 @@ function fill_matrix_ewald(H11, H12, H21, H22, A0, Aqs, swt, Na)
     end
 
     (; sys, data) = swt
-    (; spins_localized) = data
+    (; spin_ops) = data
     (; gs) = sys
 
     @assert !isnothing(sys.ewald)
@@ -94,8 +94,8 @@ function fill_matrix_ewald(H11, H12, H21, H22, A0, Aqs, swt, Na)
         J = gs[i]' * Aq[i, j] * gs[j] / 2
         J0 = gs[i]' * A0[i, j] * gs[j] / 2
         for α in 1:3, β in 1:3
-            Ai = spins_localized[α, i]
-            Bj = spins_localized[β, j]
+            Ai = spin_ops[α, i]
+            Bj = spin_ops[β, j]
 
             for m in 1:N-1, n in 1:N-1
                 c = (Ai[m,n] - δ(m,n)*Ai[N,N]) * (Bj[N,N])

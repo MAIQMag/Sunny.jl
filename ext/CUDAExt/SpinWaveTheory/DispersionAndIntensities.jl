@@ -77,7 +77,7 @@ function _intensities(swt, qs, L, Ncells, H, Nobs, Na, Ncorr, recipvecs, intensi
             data = swt.data::SWTDataSUNDevice
             N = sys.Ns
             for i in 1:Na, μ in 1:Nobs
-                O = view(data.observables_localized, :, :, μ, i)
+                O = view(data.observables, :, :, μ, i)
                 for α in 1:N-1
                    idx = α + (i-1)*(N-1)
                    Avecq[μ] += Avec_prefq[μ, i] * (O[α, N] * t[idx + L] + O[N, α] * t[idx])
@@ -86,7 +86,7 @@ function _intensities(swt, qs, L, Ncells, H, Nobs, Na, Ncorr, recipvecs, intensi
         else
             data = swt.data::SWTDataDipoleDevice
             for i in 1:Na, μ in 1:Nobs
-                O = data.observables_localized[μ, i]
+                O = data.observables[μ, i]
                 # This is the Avec of the two transverse and one
                 # longitudinal directions in the local frame. (In the
                 # local frame, z is longitudinal, and we are computing
@@ -128,7 +128,7 @@ function _intensities_lowershmem(swt, qs, L, Ncells, H, Nobs, Na, Ncorr, recipve
 	        for μ in 1:Nobs
                 outer_sum = ComplexF64(0.)
                 for i in 1:Na
-                    O = view(data.observables_localized, :, :, μ, i)
+                    O = view(data.observables, :, :, μ, i)
                     inner_sum = ComplexF64(0.)
                     for α in 1:N-1
                         idx = α + (i-1)*(N-1)
@@ -143,7 +143,7 @@ function _intensities_lowershmem(swt, qs, L, Ncells, H, Nobs, Na, Ncorr, recipve
 	        for μ in 1:Nobs
                 sum = ComplexF64(0.)
                 for i in 1:Na
-                    O = data.observables_localized[μ, i]
+                    O = data.observables[μ, i]
                     # This is the Avec of the two transverse and one
                     # longitudinal directions in the local frame. (In the
                     # local frame, z is longitudinal, and we are computing
