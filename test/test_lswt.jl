@@ -724,3 +724,21 @@ end
     data_ref = [0.042551644188 0.148531187027 0.042551644188; 0.123710785142 0.944407715529 0.123710785142; 1.079575108835 1.261286085876 1.079575108835; 0.492703854423 0.168505531387 0.492703854423; 0.087770506619 0.06066521855 0.087770506619; 0.034461978527 0.030825188879 0.034461978527; 0.018214262744 0.018585357642 0.018214262744; 0.011230027228 0.012410289203 0.011230027228; 0.007607320239 0.008868510563 0.007607320239; 0.005490942587 0.006651305827 0.005490942587; 0.004148615687 0.005172181047 0.004148615687]
     @test isapprox(res.data, data_ref; atol=1e-9)
 end
+
+@testitem "Powder average batching" begin
+    cryst = Crystal(lattice_vectors(1, 1, 2, 90, 90, 90), [[0, 0, 0]])
+    sys = System(cryst, [1 => Moment(s=1, g=2)], :dipole)
+    set_exchange!(sys, -1.0, Bond(1, 1, [1, 0, 0]))
+    polarize_spins!(sys, [0, 0, 1])
+    swt = SpinWaveTheory(sys; measure=ssf_perp(sys))
+    radii = range(0.1, 2, 7)
+    energies = range(0, 5, 11)
+
+    # Batches of shells give the same result
+    res1 = powder_average(qs -> intensities(swt, qs; energies, kernel=gaussian(fwhm=0.5)), cryst, radii, 20)
+    res2 = powder_average(qs -> intensities(swt, qs; energies, kernel=gaussian(fwhm=0.5)), cryst, radii, 20; batch_size=3)
+    @test res1.data ≈ res2.data rtol=1e-14
+    res1 = powder_average(qs -> intensities_static(swt, qs), cryst, radii, 20)
+    res2 = powder_average(qs -> intensities_static(swt, qs), cryst, radii, 20; batch_size=3)
+    @test res1.data ≈ res2.data rtol=1e-14
+end

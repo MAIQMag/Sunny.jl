@@ -4,6 +4,8 @@ module KACUDAExt
 using CUDA: CUDA, CuArray, CuMatrix, CUBLAS, CUSOLVER
 using Sunny: Sunny
 
+Sunny.device_free_memory(::CUDA.CUDABackend) = CUDA.free_memory()
+
 # Workspace in bytes of `CUSOLVER.XsyevBatched!` per n×n matrix, which is
 # roughly independent of the batch size
 function syev_workspace_per_matrix(n)

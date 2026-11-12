@@ -188,6 +188,10 @@ extension_fns = [
 # such as ext/KACUDAExt, and KAExt documents the status codes.
 function vendor_bogoliubov! end
 
+# Free memory in bytes of a KernelAbstractions backend, if known. Methods are
+# defined by ext/KAExt and backend-specific extensions such as ext/KACUDAExt.
+function device_free_memory end
+
 for (_pkg, fns) in extension_fns
     for fn in fns
         @eval function $fn end

@@ -101,7 +101,7 @@ end
 
 
 """
-    powder_average(f, cryst, radii, n; seed=0)
+    powder_average(f, cryst, radii, n; seed=0, batch_size=1)
 
 Calculate a powder-average over structure factor intensities. The `radii`, with
 units of inverse length, define spherical shells in reciprocal space. The
@@ -110,6 +110,10 @@ sphere, with quasi-uniformity. Sample points on different shells are
 decorrelated through random rotations. A consistent random number `seed` will
 yield reproducible results. The function `f` should accept a list of q-points
 and call [`intensities`](@ref) or [`intensities_static`](@ref).
+
+Each call to `f` receives the points of `batch_size` shells, concatenated.
+Larger batches can be more efficient for a calculation on a GPU, and give the
+same result.
 
 # Example
 ```julia
@@ -120,7 +124,7 @@ end
 plot_intensities(res)
 ```
 """
-function powder_average(f, cryst, radii, n::Int; seed=0)
+function powder_average(f, cryst, radii, n::Int; seed=0, batch_size=1)
     res = f([Vec3(0,0,0)]) # Dummy call to learn types
     if res isa Intensities
         data = zeros(eltype(res.data), length(res.energies), length(radii))
@@ -135,13 +139,14 @@ function powder_average(f, cryst, radii, n::Int; seed=0)
     rng = Random.Xoshiro(seed)
     sphpts = sphere_points(n)
     to_rlu = inv(cryst.recipvecs)
-    for (i, radius) in enumerate(radii)
-        R = Mat3(random_orthogonal(rng, 3))
-        res = f(Ref(to_rlu * R * radius) .* sphpts)
+    for is in Iterators.partition(eachindex(radii), batch_size)
+        # One random rotation per shell, in order, independent of batching
+        qs = reduce(vcat, [Ref(to_rlu * Mat3(random_orthogonal(rng, 3)) * radii[i]) .* sphpts for i in is])
+        res = f(qs)
         if res isa Intensities
-            data[:, i] .= Statistics.mean(res.data; dims=2)
+            data[:, is] .= dropdims(Statistics.mean(reshape(res.data, :, n, length(is)); dims=2); dims=2)
         else
-            data[i] = Statistics.mean(res.data)
+            data[is] .= vec(Statistics.mean(reshape(res.data, n, length(is)); dims=1))
         end
     end
 

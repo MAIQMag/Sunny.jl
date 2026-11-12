@@ -74,7 +74,10 @@
             res_d = intensities(swt_d, qs; energies, batch_size=8, b...)
             @test eltype(res_d.data) == eltype(res.data)
             @test res_d.data ≈ res.data rtol=1e-12
+            res_d = Sunny.Intensities(intensities(swt_d, qs; energies, batch_size=8, output=:device, b...))
+            @test res_d.data ≈ res.data rtol=1e-12
         end
+        return swt_d
     end
 end
 
@@ -85,6 +88,7 @@ end
 
 @testitem "KAExt intensities" setup=[KAModels] begin
     using .KAModels: fcc_afm, entangled_dimers, test_device_intensities
+    using LinearAlgebra: tr
     import KernelAbstractions: CPU
     backend = CPU()
 
@@ -94,10 +98,17 @@ end
         test_device_intensities(swt, backend)
     end
 
-    # A measure with many real components
+    # The combiner of a measure runs on device if it can. Otherwise its forms
+    # are evaluated on the host, once if they are independent of q.
     sys = fcc_afm(:dipole)
-    swt = SpinWaveTheory(sys; measure=ssf_custom((q, ssf) -> ssf, sys))
-    test_device_intensities(swt, backend; broadenings=[(; η=0.1, kernel=gaussian(fwhm=1.0), kT=0.3)])
+    b = [(; η=0.1, kernel=gaussian(fwhm=1.0), kT=0.3)]
+    # Capturing a Vector makes a combiner non-isbits
+    for (f, mode) in [((q, ssf) -> ssf, :combiner),
+                      let w = [1.0]; ((q, ssf) -> w[1] * real(tr(ssf)), :constant_forms) end,
+                      let w = [1.0]; ((q, ssf) -> w[1] * real(ssf[1, 1] + ssf[2, 2]) * (1 + q[1]^2), :forms) end]
+        swt_d = test_device_intensities(SpinWaveTheory(sys; measure=ssf_custom(f, sys)), backend; broadenings=b)
+        @test swt_d.measure_mode == mode
+    end
 
     # Entangled units, whose observables have several parts
     sys = entangled_dimers()

@@ -47,20 +47,49 @@ end
     A[μ, n, b] = s
 end
 
-# The residues of the poles of χ″, as real components k of the measure. The
+# The Float64 components of x, an isbits composite of them, in memory order.
+# Like `Sunny.real_components`, but without `reinterpret`, which fails to
+# compile for GPUs.
+@generated function real_components(x::T) where T
+    exprs = Any[]
+    walk(ex, S) = S === Float64 ? push!(exprs, ex) :
+        foreach(((i, F),) -> walk(:(getfield($ex, $i)), F), enumerate(fieldtypes(S)))
+    walk(:x, T)
+    return :(tuple($(exprs...)))
+end
+
+# The residues of the poles of χ″, as real components k of the measure,
+# mirroring `Sunny.susceptibility_poles`. The combiner receives the pair
+# correlations as a static vector. A pole at negative energy has a negative
+# weight.
+@kernel function residues_combiner!(disp, R, @Const(E), @Const(A), @Const(qs_global), combiner, corr_pairs, q0, Ncells)
+    n, b = @index(Global, NTuple)
+    ε = E[n, b]
+    disp[n, q0+b] = ε
+    corr = map(corr_pairs) do (μ, ν)
+        A[μ, n, b] * conj(A[ν, n, b]) / Ncells
+    end
+    xs = real_components(combiner(qs_global[b], corr))
+    for k in eachindex(xs)
+        R[k, n, q0+b] = sign(ε) * xs[k]
+    end
+end
+
+# Like `residues_combiner!`, for a combiner that cannot run on device. The
 # correlations C = A A† / Ncells of a band are rank one, so component k of the
 # combiner is tr(M_k C) = A† M_k A / Ncells, for the forms M_k of
-# `Sunny.measure_forms`. A pole at negative energy has a negative weight.
+# `Sunny.measure_forms`, given per wavevector or once for all.
 @kernel function residues!(disp, R, @Const(E), @Const(A), @Const(M), q0, Ncells)
     n, b = @index(Global, NTuple)
     ε = E[n, b]
     disp[n, q0+b] = ε
+    bM = size(M, 4) == 1 ? 1 : b
     for k in axes(M, 3)
         s = zero(eltype(A))
         for ν in axes(A, 1)
             Aν = A[ν, n, b]
             for μ in axes(A, 1)
-                s += conj(A[μ, n, b]) * M[μ, ν, k, b] * Aν
+                s += conj(A[μ, n, b]) * M[μ, ν, k, bM] * Aν
             end
         end
         R[k, n, q0+b] = sign(ε) * real(s) / Ncells
