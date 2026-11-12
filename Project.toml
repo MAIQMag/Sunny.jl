@@ -30,7 +30,9 @@ StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
 [weakdeps]
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
 WGLMakie = "276b4fcb-3e11-5398-bf8b-a0c2d153d008"
 WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
@@ -38,11 +40,14 @@ WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
 [extensions]
 ExportVTKExt = "WriteVTK"
 GLMakiePrecompilesExt = ["Makie", "GLMakie"]
+KACUDAExt = ["KernelAbstractions", "CUDA"]
+KAExt = "KernelAbstractions"
 PlottingExt = "Makie"
 WGLMakiePrecompilesExt = ["Makie", "WGLMakie"]
 
 [compat]
 Brillouin = "0.5.19"
+CUDA = "6"
 ChainRulesCore = "1.26.0"
 CrystalInfoFramework = "0.8, 1, 2"
 DynamicPolynomials = "0.7"
@@ -52,6 +57,7 @@ GLMakie = "0.13"
 HCubature = "1.7.0"
 Hungarian = "0.7.0"
 JLD2 = "0.6.0"
+KernelAbstractions = "0.10"
 LineSearches = "7.4.1"
 LinearAlgebra = "1.10"
 Makie = "0.24"

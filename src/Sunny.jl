@@ -179,6 +179,8 @@ extension_fns = [
                :view_crystal, :view_bz],
     # ext/ExportVTKExt
     :WriteVTK => [:export_vtk],
+    # ext/KAExt
+    :KernelAbstractions => [:to_device],
 ]
 
 for (_pkg, fns) in extension_fns

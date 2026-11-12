@@ -416,12 +416,14 @@ excitations!(ws::BogoliubovWorkspace, H, swt::SpinWaveTheory, q) =
 # energy minimum; for a corrected Gaussian vacuum, the correction is to blame.
 function excitations_supercell!(ws::BogoliubovWorkspace, H, swt::SpinWaveTheory, q_supercell)
     hamiltonian_matrix!(H, swt, q_supercell)
-    return bogoliubov_or_throw!(ws, H) do
-        q = vec3_to_string(from_supercell_rlu(swt.sys, q_supercell))
-        isempty(swt.vacuum.correction) ? "Not an energy-minimum; wavevector q = $q unstable." :
-            "Quadratic Hamiltonian of the Gaussian vacuum is not positive definite at wavevector q = $q. If \
-             quantum fluctuations stabilize the structure, see `Sunny.to_self_consistent_vacuum`."
-    end
+    return bogoliubov_or_throw!(() -> instability_message(swt, q_supercell), ws, H)
+end
+
+function instability_message(swt::SpinWaveTheory, q_supercell)
+    q = vec3_to_string(from_supercell_rlu(swt.sys, q_supercell))
+    return isempty(swt.vacuum.correction) ? "Not an energy-minimum; wavevector q = $q unstable." :
+        "Quadratic Hamiltonian of the Gaussian vacuum is not positive definite at wavevector q = $q. If \
+         quantum fluctuations stabilize the structure, see `Sunny.to_self_consistent_vacuum`."
 end
 
 """
