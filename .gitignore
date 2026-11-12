@@ -1,6 +1,7 @@
 docs/build/
 docs/src/examples/
 Manifest.toml
+LocalPreferences.toml
 profile.pb.gz
 .DS_Store
 .vscode
