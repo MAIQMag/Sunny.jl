@@ -1,6 +1,30 @@
 @testmodule KAModels begin
     using Sunny, LinearAlgebra, Test, Random
 
+    # Ferromagnetic order with antiferromagnetic exchange is unstable
+    function unstable_chain()
+        cryst = Crystal(lattice_vectors(1, 1, 2, 90, 90, 90), [[0, 0, 0]])
+        sys = System(cryst, [1 => Moment(s=1, g=2)], :dipole)
+        set_exchange!(sys, 1.0, Bond(1, 1, [1, 0, 0]))
+        polarize_spins!(sys, [0, 0, 1])
+        return sys
+    end
+
+    # The device reproduces the error of the host at the first unstable q
+    function test_device_instability(backend; eigensolver=nothing)
+        sys = unstable_chain()
+        swt = SpinWaveTheory(sys; measure=ssf_trace(sys))
+        errors = map((swt, to_device(swt; backend, eigensolver))) do s
+            try
+                intensities(s, [[0, 0, 0], [0.3, 0, 0]]; energies=[1.0], η=0.1)
+            catch err
+                err
+            end
+        end
+        @test errors[2] isa Sunny.InstabilityError
+        @test errors[2].msg == errors[1].msg
+    end
+
     # Néel order on the fcc lattice, with cubic anisotropy
     function fcc_afm(mode)
         a = 8.289
@@ -41,10 +65,10 @@
 
     # Intensities on `backend` reproduce those on the host. A batch size that
     # does not divide the number of wavevectors exercises the final batch.
-    function test_device_intensities(swt, backend; energies=range(-2, 10, 25), broadenings=broadenings)
+    function test_device_intensities(swt, backend; eigensolver=nothing, energies=range(-2, 10, 25), broadenings=broadenings)
         Random.seed!(0)
         qs = [rand(3) for _ in 1:37]
-        swt_d = to_device(swt; backend)
+        swt_d = to_device(swt; backend, eigensolver)
         for b in broadenings
             res = intensities(swt, qs; energies, b...)
             res_d = intensities(swt_d, qs; energies, batch_size=8, b...)
@@ -79,6 +103,14 @@ end
     sys = entangled_dimers()
     test_device_intensities(SpinWaveTheory(sys; measure=ssf_perp(sys)), backend)
 
+    # The portable Jacobi eigensolver
+    for s in (fcc_afm(:dipole), fcc_afm(:SUN))
+        test_device_intensities(SpinWaveTheory(s; measure=ssf_perp(s)), backend; eigensolver=:jacobi,
+                                broadenings=[(; η=0.1, kernel=gaussian(fwhm=1.0), kT=0.3)])
+    end
+    sys = entangled_dimers()
+    test_device_intensities(SpinWaveTheory(sys; measure=ssf_perp(sys)), backend; eigensolver=:jacobi, broadenings=[(; η=0.2, kernel=nothing, kT=0)])
+
     # A corrected Gaussian vacuum
     sys = fcc_afm(:dipole)
     swt = SpinWaveTheory(sys; measure=ssf_trace(sys))
@@ -87,25 +119,17 @@ end
 end
 
 @testitem "KAExt errors" setup=[KAModels] begin
-    using .KAModels: fcc_afm
+    using .KAModels: fcc_afm, unstable_chain, test_device_instability
     import KernelAbstractions: CPU
 
-    # Ferromagnetic order with antiferromagnetic exchange is unstable
-    cryst = Crystal(lattice_vectors(1, 1, 2, 90, 90, 90), [[0, 0, 0]])
-    sys = System(cryst, [1 => Moment(s=1, g=2)], :dipole)
-    set_exchange!(sys, 1.0, Bond(1, 1, [1, 0, 0]))
-    polarize_spins!(sys, [0, 0, 1])
-    swt = SpinWaveTheory(sys; measure=ssf_trace(sys))
-    errors = map((swt, to_device(swt))) do s
-        try
-            intensities(s, [[0.3, 0, 0]]; energies=[1.0], η=0.1)
-        catch err
-            err
-        end
-    end
-    @test errors[2] isa Sunny.InstabilityError
-    @test errors[2].msg == errors[1].msg
+    test_device_instability(CPU(); eigensolver=:host)
+    test_device_instability(CPU(); eigensolver=:jacobi)
+
+    sys = unstable_chain()
     @test_throws "not supported for" to_device(SpinWaveTheorySpiral(sys; measure=ssf_trace(sys), k=[0, 0, 0], axis=[0, 0, 1]))
+    swt = SpinWaveTheory(sys; measure=ssf_trace(sys))
+    @test_throws "Unknown eigensolver" to_device(swt; eigensolver=:magic)
+    @test_throws "No vendor eigensolver" to_device(swt; eigensolver=:vendor)
 
     sys = fcc_afm(:dipole)
     swt_d = to_device(SpinWaveTheory(sys; measure=nothing))
@@ -116,12 +140,17 @@ end
 end
 
 @testitem "KAExt intensities on CUDA" tags=[:gpu] setup=[KAModels] begin
-    using .KAModels: fcc_afm, test_device_intensities
+    using .KAModels: fcc_afm, test_device_intensities, test_device_instability
     import CUDA
+    backend = CUDA.CUDABackend()
 
-    for mode in (:dipole, :SUN)
-        sys = fcc_afm(mode)
-        swt = SpinWaveTheory(sys; measure=ssf_perp(sys; formfactors=[1 => FormFactor("Co2")]))
-        test_device_intensities(swt, CUDA.CUDABackend())
+    for eigensolver in (:vendor, :jacobi, :host)
+        for mode in (:dipole, :SUN)
+            sys = fcc_afm(mode)
+            swt = SpinWaveTheory(sys; measure=ssf_perp(sys; formfactors=[1 => FormFactor("Co2")]))
+            test_device_intensities(swt, backend; eigensolver)
+        end
+        test_device_instability(backend; eigensolver)
     end
+    @test to_device(SpinWaveTheory(fcc_afm(:dipole); measure=nothing); backend).eigensolver == :vendor
 end

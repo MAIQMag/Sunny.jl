@@ -183,6 +183,11 @@ extension_fns = [
     :KernelAbstractions => [:to_device],
 ]
 
+# Batched Bogoliubov transformation by a vendor library, as
+# `vendor_bogoliubov!(T, E, H, nb, status)`. Methods are defined by extensions
+# such as ext/KACUDAExt, and KAExt documents the status codes.
+function vendor_bogoliubov! end
+
 for (_pkg, fns) in extension_fns
     for fn in fns
         @eval function $fn end
