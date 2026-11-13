@@ -1,16 +1,21 @@
 # Benchmark `intensities` of SpinWaveTheory on a KernelAbstractions device
-# against the threaded host calculation. To run on an NVIDIA GPU:
+# against the threaded host calculation. Run with
 #
-#     julia --threads=auto --project=@. bench_kaext.jl
+#     julia --threads=auto --project=@. bench_kaext.jl [cuda|metal|cpu]
 #
-# with Sunny, CUDA and KernelAbstractions available. Timings are the minimum of
-# three warm runs. Without CUDA, the KernelAbstractions CPU backend is used.
+# with Sunny, KernelAbstractions, and the GPU package available. The backend
+# defaults to CUDA, then Metal (Apple silicon, Float32 only), then the
+# KernelAbstractions CPU backend. Timings are the minimum of three warm runs.
 
 using Sunny, KernelAbstractions, LinearAlgebra
-const backend = try
-    @eval using CUDA
-    CUDA.functional() ? CUDA.CUDABackend() : KernelAbstractions.CPU()
-catch
+const choice = isempty(ARGS) ? "auto" : lowercase(ARGS[1])
+choice in ("auto", "cuda") && try @eval using CUDA catch end
+choice in ("auto", "metal") && try @eval using Metal catch end
+const backend = if isdefined(Main, :CUDA) && CUDA.functional()
+    CUDA.CUDABackend()
+elseif isdefined(Main, :Metal) && Metal.functional()
+    Metal.MetalBackend()
+else
     KernelAbstractions.CPU()
 end
 
@@ -40,13 +45,14 @@ function bench(sys, Nq; host=true)
     for (name, η, kernel) in (("η=0, kernel", 0, gaussian(fwhm=0.5)), ("η, no kernel", 0.1, nothing),
                               ("η and kernel", 0.1, gaussian(fwhm=0.5)))
         t_host = host ? besttime(() -> intensities(swt, qs; energies, η, kernel, threaded=true)) : NaN
-        t_out = besttime(() -> intensities(swt_d, qs; energies, η, kernel))
-        t_dev = besttime(() -> (intensities(swt_d, qs; energies, η, kernel, output=:device); KernelAbstractions.synchronize(backend)))
+        t_out = besttime(() -> intensities(swt_d, qs; energies, η, kernel, threaded=true))
+        t_dev = besttime(() -> (intensities(swt_d, qs; energies, η, kernel, threaded=true, output=:device); KernelAbstractions.synchronize(backend)))
         println("  ", rpad(name, 14), "host ", round(t_host; digits=2), " s, device ", round(t_out; digits=2),
                 " s (output on device ", round(t_dev; digits=2), " s)")
     end
 end
 
+load_blas_for_threading()
 bench(fcc_afm(), 20_000)
-bench(fcc_afm(), 200_000; host=false)
+bench(fcc_afm(), 200_000; host=true)
 bench(repeat_periodically(fcc_afm(), (2, 2, 2)), 5_000)

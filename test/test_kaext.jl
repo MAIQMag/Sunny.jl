@@ -11,10 +11,10 @@
     end
 
     # The device reproduces the error of the host at the first unstable q
-    function test_device_instability(backend; eigensolver=nothing)
+    function test_device_instability(backend; eigensolver=nothing, precision=Sunny.device_precision(backend))
         sys = unstable_chain()
         swt = SpinWaveTheory(sys; measure=ssf_trace(sys))
-        errors = map((swt, to_device(swt; backend, eigensolver))) do s
+        errors = map((swt, to_device(swt; backend, eigensolver, precision))) do s
             try
                 intensities(s, [[0, 0, 0], [0.3, 0, 0]]; energies=[1.0], η=0.1)
             catch err
@@ -63,19 +63,23 @@
         (; η=0.1, kernel=gaussian(fwhm=1.0), kT=0.3),
     ]
 
-    # Intensities on `backend` reproduce those on the host. A batch size that
-    # does not divide the number of wavevectors exercises the final batch.
-    function test_device_intensities(swt, backend; eigensolver=nothing, energies=range(-2, 10, 25), broadenings=broadenings)
+    # Intensities on `backend` reproduce those on the host, to a tolerance for
+    # the `precision` on device, relative to the norm of all intensities. A
+    # batch size that does not divide the number of wavevectors exercises the
+    # final batch.
+    function test_device_intensities(swt, backend; eigensolver=nothing, precision=Sunny.device_precision(backend),
+                                     rtol=(precision == Float64 ? 1e-12 : 1e-4), energies=range(-2, 10, 25), broadenings=broadenings)
         Random.seed!(0)
         qs = [rand(3) for _ in 1:37]
-        swt_d = to_device(swt; backend, eigensolver)
+        swt_d = to_device(swt; backend, eigensolver, precision)
         for b in broadenings
             res = intensities(swt, qs; energies, b...)
             res_d = intensities(swt_d, qs; energies, batch_size=8, b...)
             @test eltype(res_d.data) == eltype(res.data)
-            @test res_d.data ≈ res.data rtol=1e-12
-            res_d = Sunny.Intensities(intensities(swt_d, qs; energies, batch_size=8, output=:device, b...))
-            @test res_d.data ≈ res.data rtol=1e-12
+            @test res_d.data ≈ res.data rtol=rtol
+            res_d = intensities(swt_d, qs; energies, batch_size=8, output=:device, b...)
+            @test real(eltype(eltype(res_d.data))) == precision
+            @test Sunny.Intensities(res_d).data ≈ res.data rtol=rtol
         end
         return swt_d
     end
@@ -98,6 +102,16 @@ end
         test_device_intensities(swt, backend)
     end
 
+    # Float32 on device, with both eigensolvers. The :host eigensolver works in
+    # Float64 on the Float32 Hamiltonian.
+    for mode in (:dipole, :SUN), eigensolver in (:host, :jacobi)
+        sys = fcc_afm(mode)
+        swt = SpinWaveTheory(sys; measure=ssf_perp(sys; formfactors=[1 => FormFactor("Co2")]))
+        swt_d = test_device_intensities(swt, backend; eigensolver, precision=Float32)
+        @test swt_d.measure_mode == :combiner
+        @test occursin("in Float32", sprint(show, MIME"text/plain"(), swt_d))
+    end
+
     # The combiner of a measure runs on device if it can. Otherwise its forms
     # are evaluated on the host, once if they are independent of q.
     sys = fcc_afm(:dipole)
@@ -106,13 +120,16 @@ end
     for (f, mode) in [((q, ssf) -> ssf, :combiner),
                       let w = [1.0]; ((q, ssf) -> w[1] * real(tr(ssf)), :constant_forms) end,
                       let w = [1.0]; ((q, ssf) -> w[1] * real(ssf[1, 1] + ssf[2, 2]) * (1 + q[1]^2), :forms) end]
-        swt_d = test_device_intensities(SpinWaveTheory(sys; measure=ssf_custom(f, sys)), backend; broadenings=b)
-        @test swt_d.measure_mode == mode
+        for precision in (Float64, Float32)
+            swt_d = test_device_intensities(SpinWaveTheory(sys; measure=ssf_custom(f, sys)), backend; precision, broadenings=b)
+            @test swt_d.measure_mode == mode
+        end
     end
 
     # Entangled units, whose observables have several parts
     sys = entangled_dimers()
     test_device_intensities(SpinWaveTheory(sys; measure=ssf_perp(sys)), backend)
+    test_device_intensities(SpinWaveTheory(sys; measure=ssf_perp(sys)), backend; precision=Float32)
 
     # The portable Jacobi eigensolver
     for s in (fcc_afm(:dipole), fcc_afm(:SUN))
@@ -133,14 +150,16 @@ end
     using .KAModels: fcc_afm, unstable_chain, test_device_instability
     import KernelAbstractions: CPU
 
-    test_device_instability(CPU(); eigensolver=:host)
-    test_device_instability(CPU(); eigensolver=:jacobi)
+    for eigensolver in (:host, :jacobi), precision in (Float64, Float32)
+        test_device_instability(CPU(); eigensolver, precision)
+    end
 
     sys = unstable_chain()
     @test_throws "not supported for" to_device(SpinWaveTheorySpiral(sys; measure=ssf_trace(sys), k=[0, 0, 0], axis=[0, 0, 1]))
     swt = SpinWaveTheory(sys; measure=ssf_trace(sys))
     @test_throws "Unknown eigensolver" to_device(swt; eigensolver=:magic)
     @test_throws "No vendor eigensolver" to_device(swt; eigensolver=:vendor)
+    @test_throws "Unsupported precision" to_device(swt; precision=Float16)
 
     sys = fcc_afm(:dipole)
     swt_d = to_device(SpinWaveTheory(sys; measure=nothing))
@@ -150,7 +169,7 @@ end
     @test_throws "Dipole-dipole interactions are not yet supported" to_device(SpinWaveTheory(sys; measure=ssf_trace(sys)))
 end
 
-@testitem "KAExt intensities on CUDA" tags=[:gpu] setup=[KAModels] begin
+@testitem "KAExt intensities on CUDA" tags=[:gpu, :cuda] setup=[KAModels] begin
     using .KAModels: fcc_afm, test_device_intensities, test_device_instability
     import CUDA
     backend = CUDA.CUDABackend()
@@ -164,4 +183,29 @@ end
         test_device_instability(backend; eigensolver)
     end
     @test to_device(SpinWaveTheory(fcc_afm(:dipole); measure=nothing); backend).eigensolver == :vendor
+end
+
+# Metal lacks Float64, so the device works in Float32, and a vendor eigensolver
+@testitem "KAExt intensities on Metal" tags=[:gpu, :metal] setup=[KAModels] begin
+    using .KAModels: fcc_afm, test_device_intensities, test_device_instability
+    import Metal
+    backend = Metal.MetalBackend()
+
+    @test Sunny.device_precision(backend) == Float32
+    @test Sunny.device_free_memory(backend) > 0
+    for eigensolver in (:jacobi, :host)
+        for mode in (:dipole, :SUN)
+            sys = fcc_afm(mode)
+            swt = SpinWaveTheory(sys; measure=ssf_perp(sys; formfactors=[1 => FormFactor("Co2")]))
+            swt_d = test_device_intensities(swt, backend; eigensolver)
+            # The combiner of `ssf_perp` computes in Float64, so its forms are
+            # evaluated on the host instead
+            @test_broken swt_d.measure_mode == :combiner
+        end
+        test_device_instability(backend; eigensolver)
+    end
+    swt = SpinWaveTheory(fcc_afm(:dipole); measure=nothing)
+    @test to_device(swt; backend).eigensolver == :jacobi
+    @test_throws "No vendor eigensolver" to_device(swt; backend, eigensolver=:vendor)
+    @test_throws "Float64" to_device(swt; backend, precision=Float64)
 end

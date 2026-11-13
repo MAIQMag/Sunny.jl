@@ -17,7 +17,7 @@ function bogoliubov_batched!(T, E, H, nb, swt_d, qs_supercell; threaded)
     n = size(H, 1)
     status = KA.allocate(backend, Int32, nb)
     if eigensolver == :jacobi
-        W = KA.allocate(backend, ComplexF64, (n, n, nb))
+        W = KA.allocate(backend, eltype(H), (n, n, nb))
         bogoliubov_jacobi!(backend)(T, E, H, W, status; ndrange=nb)
         KA.synchronize(backend)
     else
@@ -37,11 +37,12 @@ function throw_bogoliubov_status(status, swt, qs_supercell)
     throw(Sunny.InstabilityError(Sunny.instability_message(swt, qs_supercell[b])))
 end
 
-# Copies to the host and calls LAPACK per wavevector
+# Copies to the host and calls LAPACK per wavevector, in Float64 whatever the
+# precision of H
 function bogoliubov_host!(T, E, H, nb, swt, qs_supercell; threaded)
     n = size(H, 1)
     L = n ÷ 2
-    on_host = H isa Array
+    on_host = H isa Array{ComplexF64}
     (H_h, T_h, E_h) = on_host ? (H, T, E) : (Array(view(H, :, :, 1:nb)), similar(Array{ComplexF64}, n, n, nb), similar(Array{Float64}, n, nb))
     newbuf() = (ws = Sunny.BogoliubovWorkspace(L), Hm = zeros(ComplexF64, n, n))
     Sunny.foreach_chunked(newbuf, 1:nb; threaded) do (; ws, Hm), b
@@ -51,8 +52,8 @@ function bogoliubov_host!(T, E, H, nb, swt, qs_supercell; threaded)
         view(E_h, :, b) .= ε
     end
     if !on_host
-        copyto!(view(T, :, :, 1:nb), T_h)
-        copyto!(view(E, :, 1:nb), E_h)
+        copyto!(view(T, :, :, 1:nb), convert(Array{eltype(T)}, T_h))
+        copyto!(view(E, :, 1:nb), convert(Array{eltype(E)}, E_h))
     end
     return
 end
@@ -81,7 +82,8 @@ end
     app = real(A[p, p, b])
     aqq = real(A[q, q, b])
     θ = (aqq - app) / 2g
-    t = abs(θ) > 1e150 ? 1 / 2θ : copysign(1 / (abs(θ) + sqrt(θ^2 + 1)), θ)
+    # Beyond 1/√ε, the relative error of t ≈ 1/2θ is below ε, and θ² may overflow
+    t = abs(θ) > inv(sqrt(eps(typeof(θ)))) ? 1 / 2θ : copysign(1 / (abs(θ) + sqrt(θ^2 + 1)), θ)
     c = 1 / sqrt(t^2 + 1)
     s = t * c
     (Gpp, Gpq, Gqp, Gqq) = (complex(c), complex(s), -s * conj(eiφ), c * conj(eiφ))
@@ -115,6 +117,7 @@ end
     b = @index(Global)
     n = size(H, 1)
     L = n ÷ 2
+    C = eltype(H)
     st = STATUS_OK
 
     for j in 1:n, i in 1:n
@@ -152,7 +155,7 @@ end
             end
             W[j, j, b] = 1 / real(H[j, j, b])
             for i in j+1:n
-                x = zero(ComplexF64)
+                x = zero(C)
                 for k in j:i-1
                     x += H[i, k, b] * W[k, j, b]
                 end
@@ -162,7 +165,7 @@ end
 
         # A = K⁻¹ Ĩ K⁻† in T, with Ĩ = diag(1, …, 1, -1, …, -1)
         for j in 1:n, i in j:n
-            x = zero(ComplexF64)
+            x = zero(C)
             for k in 1:j
                 x += ifelse(k <= L, 1, -1) * W[i, k, b] * conj(W[j, k, b])
             end
@@ -181,7 +184,7 @@ end
             rotated = false
             for q in 2:n, p in 1:q-1
                 g = abs(T[p, q, b])
-                if g > eps() * sqrt(abs(real(T[p, p, b]) * real(T[q, q, b])))
+                if g > eps(real(C)) * sqrt(abs(real(T[p, p, b]) * real(T[q, q, b])))
                     jacobi_rotate!(T, H, p, q, b)
                     rotated = true
                 end
@@ -206,7 +209,7 @@ end
             pos = bogoliubov_position(E, j, b, L)
             c = 1 / sqrt(abs(E[j, b]))
             for i in 1:n
-                x = zero(ComplexF64)
+                x = zero(C)
                 for k in i:n
                     x += conj(W[k, i, b]) * H[k, j, b]
                 end

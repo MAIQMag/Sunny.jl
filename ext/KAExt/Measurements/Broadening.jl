@@ -11,23 +11,43 @@ struct NonstationaryKernel{F}
 end
 (k::NonstationaryKernel)(ε, ω) = k.f(ε, ω)
 
-device_kernel(k::Sunny.Broadening) = StationaryKernel(k.kernel)
-device_kernel(k::Sunny.NonstationaryBroadening) = NonstationaryKernel(k.kernel)
+# The kernels of `Sunny.gaussian` and `Sunny.lorentzian` in precision F. The
+# closures of Sunny capture their widths in Float64.
+struct GaussianKernel{F}
+    inv_2σ2 :: F
+    norm    :: F
+end
+GaussianKernel{F}(σ) where F = GaussianKernel{F}(1 / 2σ^2, 1 / √(2π*σ^2))
+(k::GaussianKernel)(x) = exp(-x^2 * k.inv_2σ2) * k.norm
+
+struct LorentzianKernel{F}
+    Γ2  :: F  # half width Γ/2
+    Γ2π :: F
+end
+LorentzianKernel{F}(Γ) where F = LorentzianKernel{F}(Γ/2, (Γ/2) / π)
+(k::LorentzianKernel)(x) = k.Γ2π / (x^2 + k.Γ2^2)
+
+function device_kernel(k::Sunny.Broadening, F)
+    k.name == "Gaussian" && return StationaryKernel(GaussianKernel{F}(k.fwhm / 2√(2log(2))))
+    k.name == "Lorentzian" && return StationaryKernel(LorentzianKernel{F}(k.fwhm))
+    return StationaryKernel(k.kernel)
+end
+device_kernel(k::Sunny.NonstationaryBroadening, F) = NonstationaryKernel(k.kernel)
 
 # Mirrors `Sunny.thermal_factor`, without the assertion on kT
-thermal_factor(ω, kT) = iszero(kT) ? (ω > 0 ? 1.0 : 0.0) : -1 / expm1(-ω/kT)
+thermal_factor(ω, kT) = iszero(kT) ? (ω > 0 ? one(ω) : zero(ω)) : -1 / expm1(-ω/kT)
 
 # Lorentzian of half width η times the thermal factor, mirroring the kernel of
 # `Sunny.broaden_poles` and `Sunny.thermal_factor_at`
-struct LorentzianThermal
-    η  :: Float64
-    kT :: Float64
+struct LorentzianThermal{F}
+    η  :: F
+    kT :: F
 end
-function (k::LorentzianThermal)(ε, ω)
+function (k::LorentzianThermal{F})(ε, ω) where F
     (; η, kT) = k
-    L = (η/π) / ((ω - ε)^2 + η^2)
+    L = (η/F(π)) / ((ω - ε)^2 + η^2)
     th = if iszero(kT)
-        ω > 0 ? 1.0 : iszero(ω) ? 0.5 : 0.0
+        ω > 0 ? one(F) : iszero(ω) ? F(0.5) : zero(F)
     elseif iszero(ω)
         2kT * ε / (ε^2 + η^2)
     else
@@ -40,8 +60,8 @@ end
 # factor if `thermal`, and the norm of W as a value of the measure
 @kernel function peak_weights!(W, norms, @Const(disp), @Const(R), kT, thermal)
     n, iq = @index(Global, NTuple)
-    f = thermal ? thermal_factor(disp[n, iq], kT) : 1.0
-    s = 0.0
+    f = thermal ? thermal_factor(disp[n, iq], kT) : one(eltype(W))
+    s = zero(eltype(W))
     for k in axes(R, 1)
         w = f * R[k, n, iq]
         W[k, n, iq] = w
@@ -107,24 +127,25 @@ function prepare_broadening(backend, disp, R; energies, η, kernel, kT)
     issorted(energies) || error("Energies must be sorted")
 
     (K, n, Nq) = size(R)
+    F = eltype(R)
     Nω = length(energies)
-    energies_d = to_backend(backend, collect(Float64, energies))
+    energies_d = to_backend(backend, collect(F, energies))
 
     if iszero(η) || isnothing(kernel)
         thermal = iszero(η)
-        W = KA.allocate(backend, Float64, (K, n, Nq))
-        norms = KA.allocate(backend, Float64, (n, Nq))
-        Nq > 0 && peak_weights!(backend)(W, norms, disp, R, Float64(kT), thermal; ndrange=(n, Nq))
+        W = KA.allocate(backend, F, (K, n, Nq))
+        norms = KA.allocate(backend, F, (n, Nq))
+        Nq > 0 && peak_weights!(backend)(W, norms, disp, R, F(kT), thermal; ndrange=(n, Nq))
         KA.synchronize(backend)
-        cutoff = Nq > 0 ? 1e-12 * Sunny.Statistics.quantile(vec(Array(norms)), 0.95) : 0.0
-        kern = thermal ? device_kernel(kernel) : LorentzianThermal(η, kT)
-        return (; kind=:peaks, K, Nω, energies_d, disp, W, norms, cutoff, kern, bytes_per_q=8K*Nω)
+        cutoff = F(Nq > 0 ? 1e-12 * Sunny.Statistics.quantile(vec(Array(norms)), 0.95) : 0.0)
+        kern = thermal ? device_kernel(kernel, F) : LorentzianThermal{F}(η, kT)
+        return (; kind=:peaks, K, Nω, energies_d, disp, W, norms, cutoff, kern, bytes_per_q=sizeof(F)*K*Nω)
     else
         (; zs, W, ranges) = Sunny.RetardedBroadening(energies; η, kernel, kT, order=16, cutoff=1e-16)
         (zs, W, blocks) = banded_quadrature(zs, W, ranges)
         Nz = length(zs)
-        return (; kind=:retarded, K, Nω, disp, R, Nz, blocks, zs=to_backend(backend, zs),
-                Wr=to_backend(backend, real(W) / π), Wi=to_backend(backend, imag(W) / π), bytes_per_q=8K*(2Nω + 2Nz))
+        return (; kind=:retarded, K, Nω, disp, R, Nz, blocks, zs=to_backend(backend, F, zs),
+                Wr=to_backend(backend, F, real(W) / π), Wi=to_backend(backend, F, imag(W) / π), bytes_per_q=sizeof(F)*K*(2Nω + 2Nz))
     end
 end
 
@@ -179,7 +200,8 @@ end
 function broadening_scratch(backend, plan, nb)
     plan.kind == :peaks && return nothing
     (; K, Nz, Nω) = plan
-    χr = KA.allocate(backend, Float64, (Nz, K, nb))
-    χi = KA.allocate(backend, Float64, (Nz, K, nb))
-    return (χr, χi, KA.allocate(backend, Float64, (Nω, K, nb)))
+    F = eltype(plan.R)
+    χr = KA.allocate(backend, F, (Nz, K, nb))
+    χi = KA.allocate(backend, F, (Nz, K, nb))
+    return (χr, χi, KA.allocate(backend, F, (Nω, K, nb)))
 end

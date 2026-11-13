@@ -5,13 +5,14 @@
 @kernel function build_hamiltonian!(H, @Const(rowptr), @Const(cols), @Const(offset_index), @Const(vals),
                                     @Const(offsets), @Const(qs_supercell), regularization)
     r, b = @index(Global, NTuple)
+    F = real(eltype(H))
     for c in axes(H, 2)
         H[r, c, b] = 0
     end
     q = qs_supercell[b]
     for e in rowptr[r]:rowptr[r+1]-1
         c = cols[e]
-        v = cis(2π * dot(q, offsets[offset_index[e]])) * vals[e]
+        v = cis(F(2π) * dot(q, offsets[offset_index[e]])) * vals[e]
         H[r, c, b] += r == c ? real(v) : v
     end
     H[r, r, b] += regularization
@@ -23,7 +24,7 @@ end
     i, μ, b = @index(Global, NTuple)
     L = size(u, 1) ÷ 2
     q = qs_global[b]
-    q2 = Sunny.norm2(q)
+    q2 = sum(abs2, q)  # unlike `Sunny.norm2`, in the precision of q
     for a in (i-1)*Nf+1:i*Nf
         u[a, μ, b] = 0
         u[L+a, μ, b] = 0
@@ -47,12 +48,12 @@ end
     A[μ, n, b] = s
 end
 
-# The Float64 components of x, an isbits composite of them, in memory order.
-# Like `Sunny.real_components`, but without `reinterpret`, which fails to
+# The floating point components of x, an isbits composite of them, in memory
+# order. Like `Sunny.real_components`, but without `reinterpret`, which fails to
 # compile for GPUs.
 @generated function real_components(x::T) where T
     exprs = Any[]
-    walk(ex, S) = S === Float64 ? push!(exprs, ex) :
+    walk(ex, S) = S <: Base.IEEEFloat ? push!(exprs, ex) :
         foreach(((i, F),) -> walk(:(getfield($ex, $i)), F), enumerate(fieldtypes(S)))
     walk(:x, T)
     return :(tuple($(exprs...)))

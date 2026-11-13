@@ -189,8 +189,13 @@ extension_fns = [
 function vendor_bogoliubov! end
 
 # Free memory in bytes of a KernelAbstractions backend, if known. Methods are
-# defined by ext/KAExt and backend-specific extensions such as ext/KACUDAExt.
+# defined by ext/KAExt and backend-specific extensions such as ext/KACUDAExt
+# and ext/KAMetalExt.
 function device_free_memory end
+
+# The default floating point type of `to_device` for a KernelAbstractions
+# backend. KAExt defines Float64, and backend-specific extensions may override it.
+function device_precision end
 
 for (_pkg, fns) in extension_fns
     for fn in fns

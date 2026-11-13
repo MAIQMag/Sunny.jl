@@ -19,6 +19,7 @@ function Sunny.intensities(swt_d::SpinWaveTheoryDevice, qpts; energies, η=0, ke
     output in (:host, :device) || error("Option `output` must be :host or :device")
     qpts = convert(Sunny.AbstractQPoints, qpts)
     Ret = eltype(measure)
+    F = precision_of(swt_d)
     Nq = length(qpts.qs)
     Nω = length(energies)
     budget = memory_budget(backend)
@@ -32,22 +33,23 @@ function Sunny.intensities(swt_d::SpinWaveTheoryDevice, qpts; energies, η=0, ke
     bq = clamp(something(batch_size, budget ÷ max(plan.bytes_per_q, 1)), 1, max(Nq, 1))
     scratch = broadening_scratch(backend, plan, bq)
     if output == :device
-        data = KA.allocate(backend, Float64, (K, Nω, Nq))
+        data = KA.allocate(backend, F, (K, Nω, Nq))
         for q0 in 0:bq:Nq-1
             broaden_batch!(backend, data, plan, q0, min(bq, Nq - q0), q0, scratch)
         end
         KA.synchronize(backend)
-        data = reshape(reinterpret(Ret, data), Nω, size(qpts.qs)...)
+        data = reshape(reinterpret(precision_type(F, Ret), data), Nω, size(qpts.qs)...)
         return IntensitiesDevice(Sunny.orig_crystal(sys), qpts, collect(Float64, energies), data)
     else
-        data = Array{Float64}(undef, K, Nω, Nq)
-        buf = KA.allocate(backend, Float64, (K, Nω, bq))
+        data = Array{F}(undef, K, Nω, Nq)
+        buf = KA.allocate(backend, F, (K, Nω, bq))
         for q0 in 0:bq:Nq-1
             nb = min(bq, Nq - q0)
             broaden_batch!(backend, buf, plan, q0, nb, 0, scratch)
             KA.synchronize(backend)
             copyto!(data, K*Nω*q0 + 1, buf, 1, K*Nω*nb)
         end
+        data = convert(Array{Float64}, data)
         data = reshape(Ret == Float64 ? data : Sunny.measure_values(Ret, data), Nω, size(qpts.qs)...)
         return Sunny.Intensities(Sunny.orig_crystal(sys), qpts, collect(Float64, energies), data)
     end
@@ -70,7 +72,8 @@ function susceptibility_poles_device(swt_d::SpinWaveTheoryDevice, qpts; batch_si
     cryst = Sunny.orig_crystal(sys)
 
     Na = Sunny.nsites(sys)
-    Ncells = Na / Sunny.natoms(cryst)
+    F = precision_of(swt_d)
+    Ncells = F(Na / Sunny.natoms(cryst))
     Nf = Sunny.nflavors(swt)
     L = Sunny.nbands(swt)
     n = 2L
@@ -80,20 +83,20 @@ function susceptibility_poles_device(swt_d::SpinWaveTheoryDevice, qpts; batch_si
 
     # Up to three complex n×n matrices per wavevector (H, T, and the scratch of
     # the Jacobi eigensolver) dominate memory
-    bytes_per_q = 16 * (3n^2 + 2n*Nobs + Nobs^2*K) + 8n*(1 + K)
+    bytes_per_q = 2sizeof(F) * (3n^2 + 2n*Nobs + Nobs^2*K) + sizeof(F)*n*(1 + K)
     batch_size = clamp(something(batch_size, budget ÷ bytes_per_q), 1, max(Nq, 1))
 
-    disp = KA.allocate(backend, Float64, (n, Nq))
-    R = KA.allocate(backend, Float64, (K, n, Nq))
-    H = KA.allocate(backend, ComplexF64, (n, n, batch_size))
-    T = KA.allocate(backend, ComplexF64, (n, n, batch_size))
-    E = KA.allocate(backend, Float64, (n, batch_size))
-    u = KA.allocate(backend, ComplexF64, (n, Nobs, batch_size))
-    A = KA.allocate(backend, ComplexF64, (Nobs, n, batch_size))
+    disp = KA.allocate(backend, F, (n, Nq))
+    R = KA.allocate(backend, F, (K, n, Nq))
+    H = KA.allocate(backend, Complex{F}, (n, n, batch_size))
+    T = KA.allocate(backend, Complex{F}, (n, n, batch_size))
+    E = KA.allocate(backend, F, (n, batch_size))
+    u = KA.allocate(backend, Complex{F}, (n, Nobs, batch_size))
+    A = KA.allocate(backend, Complex{F}, (Nobs, n, batch_size))
     (; measure_mode) = swt_d
     if measure_mode == :forms
-        M_h = zeros(ComplexF64, Nobs, Nobs, K, batch_size)
-        M = KA.allocate(backend, ComplexF64, size(M_h))
+        M_h = zeros(Complex{F}, Nobs, Nobs, K, batch_size)
+        M = KA.allocate(backend, Complex{F}, size(M_h))
     end
 
     for q0 in 0:batch_size:Nq-1
@@ -113,11 +116,11 @@ function susceptibility_poles_device(swt_d::SpinWaveTheoryDevice, qpts; batch_si
             copyto!(M, M_h)
         end
 
-        qs_supercell_d = to_backend(backend, qs_supercell)
-        qs_global_d = to_backend(backend, qs_global)
+        qs_supercell_d = to_backend(backend, F, qs_supercell)
+        qs_global_d = to_backend(backend, F, qs_global)
 
         build_hamiltonian!(backend)(H, data.rowptr, data.cols, data.offset_index, data.vals, data.offsets,
-                                    qs_supercell_d, swt.regularization; ndrange=(n, nb))
+                                    qs_supercell_d, F(swt.regularization); ndrange=(n, nb))
         KA.synchronize(backend)
         bogoliubov_batched!(T, E, H, nb, swt_d, qs_supercell; threaded)
 
