@@ -1,5 +1,6 @@
 @testmodule KAModels begin
     using Sunny, LinearAlgebra, Test, Random
+    import KernelAbstractions as KA
 
     # Ferromagnetic order with antiferromagnetic exchange is unstable
     function unstable_chain()
@@ -23,6 +24,53 @@
         end
         @test errors[2] isa Sunny.InstabilityError
         @test errors[2].msg == errors[1].msg
+    end
+
+    # The vendor eigensolver of `backend` in precision F reproduces
+    # `Sunny.bogoliubov!` on random positive definite Hamiltonians, acting on
+    # only the first nb of a larger batch, and reports the status codes of a
+    # non-finite H and a H that is not positive definite.
+    function test_vendor_bogoliubov(backend, F)
+        (L, nb) = (4, 5)
+        n = 2L
+        Ĩ = diagm([ones(L); -ones(L)])
+        rng = Xoshiro(0)
+        Hs = map(1:nb+1) do _
+            A = randn(rng, ComplexF64, n, n)
+            A * A' + I
+        end
+        function solve(Hs)
+            H_d = KA.allocate(backend, Complex{F}, (n, n, nb+1))
+            copyto!(H_d, Complex{F}.(cat(Hs...; dims=3)))
+            T_d = KA.zeros(backend, Complex{F}, (n, n, nb+1))
+            E_d = KA.zeros(backend, F, (n, nb+1))
+            status = KA.allocate(backend, Int32, nb)
+            Sunny.vendor_bogoliubov!(T_d, E_d, H_d, nb, status)
+            return (Array(T_d), Array(E_d), Array(status))
+        end
+
+        (T, E, status) = solve(Hs)
+        @test all(==(0), status)
+        (rtol, atol) = F == Float64 ? (1e-10, 1e-8) : (1e-4, 1e-3)
+        for b in 1:nb
+            T_h = zeros(ComplexF64, n, n)
+            E_h = Sunny.bogoliubov!(T_h, copy(Hs[b]))
+            @test E[:, b] ≈ E_h rtol=rtol
+            # Para-unitary, T† Ĩ T = Ĩ, and each eigenvector is defined up to
+            # a phase
+            @test T[:, :, b]' * Ĩ * T[:, :, b] ≈ Ĩ atol=atol
+            @test abs.(T[:, :, b]' * Ĩ * T_h) ≈ I(n) atol=atol
+        end
+        # The extra Hamiltonian beyond nb is untouched
+        @test iszero(T[:, :, nb+1]) && iszero(E[:, nb+1])
+
+        Hs_bad = copy(Hs)
+        Hs_bad[2] = -Hs[2]
+        (_, _, status) = solve(Hs_bad)
+        @test status[2] > 0
+        Hs_bad[4] = fill(NaN, n, n)
+        (_, _, status) = solve(Hs_bad)
+        @test status == [0, 0, 0, -1, 0]
     end
 
     # Néel order on the fcc lattice, with cubic anisotropy
@@ -212,9 +260,11 @@ end
 end
 
 @testitem "KAExt intensities on CUDA" tags=[:gpu, :cuda] setup=[KAModels] begin
-    using .KAModels: fcc_afm, test_device_intensities, test_device_instability
+    using .KAModels: fcc_afm, test_device_intensities, test_device_instability, test_vendor_bogoliubov
     import CUDA
     backend = CUDA.CUDABackend()
+
+    test_vendor_bogoliubov(backend, Float64)
 
     for eigensolver in (:vendor, :jacobi, :host)
         for mode in (:dipole, :SUN)
@@ -235,15 +285,18 @@ end
     @test Sunny.device_free_memory(AMDGPU.ROCBackend()) > 0
 end
 
-# AMD GPUs support Float64, which is the default precision. There is not yet a
-# vendor eigensolver, so the device uses :jacobi or :host.
+# AMD GPUs support Float64, which is the default precision. The vendor
+# eigensolver is rocSOLVER's batched hegvd, in either precision.
 @testitem "KAExt intensities on AMDGPU" tags=[:gpu, :amdgpu] setup=[KAModels] begin
-    using .KAModels: fcc_afm, entangled_dimers, test_device_intensities, test_device_instability
+    using .KAModels: fcc_afm, entangled_dimers, test_device_intensities, test_device_instability, test_vendor_bogoliubov
     import AMDGPU
     backend = AMDGPU.ROCBackend()
 
     @test Sunny.device_precision(backend) == Float64
-    for eigensolver in (:jacobi, :host), precision in (Float64, Float32)
+    for precision in (Float64, Float32)
+        test_vendor_bogoliubov(backend, precision)
+    end
+    for eigensolver in (:vendor, :jacobi, :host), precision in (Float64, Float32)
         for mode in (:dipole, :SUN)
             sys = fcc_afm(mode)
             swt = SpinWaveTheory(sys; measure=ssf_perp(sys; formfactors=[1 => FormFactor("Co2")]))
@@ -255,10 +308,11 @@ end
         test_device_instability(backend; eigensolver, precision)
     end
 
-    # The default eigensolver is :jacobi for small Hamiltonians, here 8×8
+    # rocSOLVER is the default eigensolver in both precisions
     swt = SpinWaveTheory(fcc_afm(:dipole); measure=nothing)
-    @test to_device(swt; backend).eigensolver == :jacobi
-    @test_throws "No vendor eigensolver" to_device(swt; backend, eigensolver=:vendor)
+    for precision in (Float64, Float32)
+        @test to_device(swt; backend, precision).eigensolver == :vendor
+    end
 end
 
 # Metal lacks Float64, so the device works in Float32, and a vendor eigensolver
