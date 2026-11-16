@@ -185,6 +185,14 @@ end
     @test to_device(SpinWaveTheory(fcc_afm(:dipole); measure=nothing); backend).eigensolver == :vendor
 end
 
+@testitem "KAAMDGPUExt loads" tags=[:gpu, :amdgpu] begin
+    import KernelAbstractions, AMDGPU
+    @test !isnothing(Base.get_extension(Sunny, :KAExt))
+    @test !isnothing(Base.get_extension(Sunny, :KAAMDGPUExt))
+    @test AMDGPU.functional()
+    @test Sunny.device_free_memory(AMDGPU.ROCBackend()) > 0
+end
+
 # Metal lacks Float64, so the device works in Float32, and a vendor eigensolver
 @testitem "KAExt intensities on Metal" tags=[:gpu, :metal] setup=[KAModels] begin
     using .KAModels: fcc_afm, test_device_intensities, test_device_instability
