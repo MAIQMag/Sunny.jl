@@ -5,13 +5,13 @@ on:
     types: [created]
 
 jobs:
-  excl-cousteau-MI100:
+  excl-cousteau-mi100:
     if: |
       github.repository_owner == 'MAIQMag' &&
       github.event.issue.pull_request &&
       startsWith(github.event.comment.body, 'Test this please')
 
-    runs-on: [self-hosted, Linux, X64, cousteau]
+    runs-on: [self-hosted, Linux, X64, ornl-excl-cousteau]
 
     env:
       GH_JOBNAME: ${{matrix.jobname}}
