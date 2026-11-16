@@ -3,11 +3,14 @@
 # that rocSOLVER takes from the rocBLAS handle.
 #
 # 1. Solvers alone, on nb random positive definite n×n Hamiltonians:
-#      :hegvd   rocSOLVER's batched hegvd, i.e. `eigensolver=:vendor`
-#      :hegvj   rocSOLVER's batched Jacobi-based hegvj, a candidate for :vendor
+#      :vendor  `Sunny.vendor_bogoliubov!`, i.e. `eigensolver=:vendor`, which
+#               calls hegvj for n ≤ 40 and hegvd beyond
+#      :hegvd   rocSOLVER's batched hegvd
+#      :hegvj   rocSOLVER's batched Jacobi-based hegvj
 #      :jacobi  the portable Jacobi kernel of KAExt
 #      :host    LAPACK on the host, threaded, with copies to and from the device
-#    Each run checks the energies against `Sunny.bogoliubov!` on the host.
+#    Each run checks the energies against `Sunny.bogoliubov!` on the host, and
+#    the eigenvectors T by the residuals of T† Ĩ T = Ĩ and H T = Ĩ T diag(E).
 # 2. `intensities` end to end, for an fcc antiferromagnet in :dipole (n = 8)
 #    and :SUN (n = 40) modes, per eigensolver of `to_device`.
 #
@@ -69,27 +72,22 @@ function random_hamiltonians(n, nb; rng=Xoshiro(0))
     return H
 end
 
-# As `Sunny.vendor_bogoliubov!` of KAAMDGPUExt, with rocSOLVER's Jacobi-based
-# hegvj in place of hegvd. Its status codes other than 0 are left as rocSOLVER
-# reports them. Returns the number of sweeps per Hamiltonian.
-hegvj(::Type{Float64}) = rocSOLVER.rocsolver_zhegvj_strided_batched
-hegvj(::Type{Float32}) = rocSOLVER.rocsolver_chegvj_strided_batched
-function bogoliubov_hegvj!(T::ROCArray{Complex{F}, 3}, E, H, nb, status) where F
+const AMDExt = Base.get_extension(Sunny, :KAAMDGPUExt)
+
+# As `Sunny.vendor_bogoliubov!` of KAAMDGPUExt, with the rocSOLVER call
+# `solve!(T, H, λ, status, nb)` chosen, e.g. `AMDExt.hegvd!` or `AMDExt.hegvj!`
+function bogoliubov_with!(solve!, T::ROCArray{Complex{F}, 3}, E, H, nb, status) where F
     n = size(H, 1)
     L = n ÷ 2
     Tb = view(T, :, :, 1:nb)
     fill!(Tb, 0)
     view(reshape(Tb, n^2, nb), 1:n+1:n^2, :) .= ROCArray(Complex{F}[ones(L); -ones(L)])
     λ = ROCArray{F}(undef, n, nb)
-    residual = ROCArray{F}(undef, nb)
-    n_sweeps = ROCArray{Int32}(undef, nb)
-    # abstol = 0 selects rocSOLVER's default tolerance
-    hegvj(F)(rocBLAS.handle(), rocSOLVER.rocblas_eform_ax, rocSOLVER.rocblas_evect_original, rocBLAS.rocblas_fill_lower,
-             n, T, n, n^2, H, n, n^2, zero(F), residual, Int32(100), n_sweeps, λ, n, status, nb)
+    solve!(T, H, λ, status, nb)
+    sb = view(status, 1:nb)
+    sb .= ifelse.(sb .> n, sb .- Int32(n), ifelse.(sb .> 0, Int32(-3), sb))
     Sunny.finish_vendor_bogoliubov!(T, E, λ, nb, status)
     AMDGPU.unsafe_free!(λ)
-    AMDGPU.unsafe_free!(residual)
-    return n_sweeps
 end
 
 # Bytes of device workspace that the rocBLAS handle holds, which grows to the
@@ -101,13 +99,32 @@ function rocblas_workspace()
 end
 
 const solvers = [
-    :hegvd => (T, E, H, W, status, nb) -> Sunny.vendor_bogoliubov!(T, E, H, nb, status),
-    :hegvj => (T, E, H, W, status, nb) -> bogoliubov_hegvj!(T, E, H, nb, status),
+    :vendor => (T, E, H, W, status, nb) -> Sunny.vendor_bogoliubov!(T, E, H, nb, status),
+    :hegvd => (T, E, H, W, status, nb) -> bogoliubov_with!(AMDExt.hegvd!, T, E, H, nb, status),
+    :hegvj => (T, E, H, W, status, nb) -> bogoliubov_with!(AMDExt.hegvj!, T, E, H, nb, status),
     :jacobi => (T, E, H, W, status, nb) -> KAExt.bogoliubov_jacobi!(backend)(T, E, H, W, status; ndrange=nb),
     # swt and qs only enter the message of an InstabilityError
     :host => (T, E, H, W, status, nb) -> KAExt.bogoliubov_host!(T, E, H, nb, nothing, nothing; threaded=true),
 ]
 const active_solvers = on_amd ? solvers : filter(s -> s.first in (:jacobi, :host), solvers)
+
+# The largest residuals over the `sample` of the batch of para-unitarity,
+# T† Ĩ T = Ĩ, and of the eigenproblem, H T = Ĩ T diag(E), relative to the norms
+# of H and T
+function eigenvector_residuals(T, E, H, sample)
+    n = size(H, 1)
+    L = n ÷ 2
+    Ĩ = Diagonal([ones(L); -ones(L)])
+    punit = maximum(sample) do b
+        Tb = ComplexF64.(T[:, :, b])
+        maximum(abs, Tb' * Ĩ * Tb - Ĩ)
+    end
+    resid = maximum(sample) do b
+        (Tb, Hb) = (ComplexF64.(T[:, :, b]), H[:, :, b])
+        norm(Hb * Tb - Ĩ * Tb * Diagonal(E[:, b])) / (norm(Hb) * norm(Tb))
+    end
+    return (punit, resid)
+end
 
 free_memory() = on_amd ? AMDGPU.free() : Int(Sys.free_memory())
 
@@ -132,9 +149,11 @@ function bench_solvers(n, F, nb)
             end - t_copy
             nfail = count(!=(0), Array(status))
             E_h = Array(E)
+            T_h = Array(T)
             err = maximum(maximum(abs, E_h[:, b] - e) / maximum(abs, e) for (b, e) in zip(sample, E_ref))
-            ws = name in (:hegvd, :hegvj) ? @sprintf("%8.2f", rocblas_workspace() / nb / 1024) : "       -"
-            @sprintf("%10.2f %10.3f %9.1e %8d %s", 1e3t, 1e6t / nb, err, nfail, ws)
+            (punit, resid) = eigenvector_residuals(T_h, E_h, H0_h, sample)
+            ws = name in (:vendor, :hegvd, :hegvj) ? @sprintf("%8.2f", rocblas_workspace() / nb / 1024) : "       -"
+            @sprintf("%10.2f %10.3f %9.1e %9.1e %9.1e %8d %s", 1e3t, 1e6t / nb, err, punit, resid, nfail, ws)
         catch e
             "failed: " * first(sprint(showerror, e), 120)
         end
@@ -190,7 +209,7 @@ on_amd ? println("Device: ", AMDGPU.device()) : println("No functional AMD GPU: 
 println()
 
 println("1. Eigensolvers alone. Times exclude the copy of H; ws is rocBLAS workspace per matrix.")
-println("   n F            nb  solver    ms total  µs/matrix   rel.err  #status  ws KiB")
+println("   n F            nb  solver    ms total  µs/matrix   rel.err  T'ĨT-Ĩ  HT-ĨTE  #status  ws KiB")
 for n in ns, F in precisions, nb in nbs
     nb_max = free_memory() ÷ 2 ÷ (4n^2 * sizeof(Complex{F}))
     if nb > nb_max
