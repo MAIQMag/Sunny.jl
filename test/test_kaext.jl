@@ -193,6 +193,32 @@ end
     @test Sunny.device_free_memory(AMDGPU.ROCBackend()) > 0
 end
 
+# AMD GPUs support Float64, which is the default precision. There is not yet a
+# vendor eigensolver, so the device uses :jacobi or :host.
+@testitem "KAExt intensities on AMDGPU" tags=[:gpu, :amdgpu] setup=[KAModels] begin
+    using .KAModels: fcc_afm, entangled_dimers, test_device_intensities, test_device_instability
+    import AMDGPU
+    backend = AMDGPU.ROCBackend()
+
+    @test Sunny.device_precision(backend) == Float64
+    for eigensolver in (:jacobi, :host), precision in (Float64, Float32)
+        for mode in (:dipole, :SUN)
+            sys = fcc_afm(mode)
+            swt = SpinWaveTheory(sys; measure=ssf_perp(sys; formfactors=[1 => FormFactor("Co2")]))
+            swt_d = test_device_intensities(swt, backend; eigensolver, precision)
+            @test swt_d.measure_mode == :combiner
+        end
+        sys = entangled_dimers()
+        test_device_intensities(SpinWaveTheory(sys; measure=ssf_perp(sys)), backend; eigensolver, precision)
+        test_device_instability(backend; eigensolver, precision)
+    end
+
+    # The default eigensolver is :jacobi for small Hamiltonians, here 8×8
+    swt = SpinWaveTheory(fcc_afm(:dipole); measure=nothing)
+    @test to_device(swt; backend).eigensolver == :jacobi
+    @test_throws "No vendor eigensolver" to_device(swt; backend, eigensolver=:vendor)
+end
+
 # Metal lacks Float64, so the device works in Float32, and a vendor eigensolver
 @testitem "KAExt intensities on Metal" tags=[:gpu, :metal] setup=[KAModels] begin
     using .KAModels: fcc_afm, test_device_intensities, test_device_instability
