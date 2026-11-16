@@ -164,6 +164,8 @@ function bench_intensities(mode)
     swt = SpinWaveTheory(sys; measure=ssf_perp(sys))
     qs = [rand(Xoshiro(1), 3) for _ in 1:nqs]
     kwargs = (; energies=range(0, 12, 200), kernel=gaussian(fwhm=0.5))
+    # Warm up on a few wavevectors, so that the time excludes compilation
+    intensities(swt, qs[1:10]; kwargs...)
     t_cpu = @elapsed res = intensities(swt, qs; kwargs...)
     n = 2Sunny.nbands(swt)
     @printf("%-7s n = %2d, %d wavevectors, CPU (%d threads) %.2f s\n", mode, n, nqs, Threads.nthreads(), t_cpu)
