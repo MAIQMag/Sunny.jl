@@ -1,9 +1,11 @@
 # Status codes of the batched Bogoliubov solvers, per wavevector. A positive
 # code j means the Cholesky factorization of H failed at column j, i.e., H is
-# not positive definite.
+# not positive definite. STATUS_NOCONVERGE is for a vendor eigensolver that
+# reports failure to converge.
 const STATUS_OK = Int32(0)
 const STATUS_NONFINITE = Int32(-1)
 const STATUS_INERTIA = Int32(-2)
+const STATUS_NOCONVERGE = Int32(-3)
 
 # Solves the Bogoliubov problem for the first `nb` Hamiltonians of `H`, storing
 # the transformations in `T` and the energies in `E`, as `Sunny.bogoliubov!`
@@ -34,7 +36,34 @@ function throw_bogoliubov_status(status, swt, qs_supercell)
     s = status[b]
     s == STATUS_NONFINITE && throw(ArgumentError("Hamiltonian contains non-finite entries"))
     s == STATUS_INERTIA && error("Bogoliubov eigenvalues lack the expected inertia")
+    s == STATUS_NOCONVERGE && error("Vendor eigensolver failed to converge; use `to_device(swt; eigensolver=:jacobi)` or `:host`")
     throw(Sunny.InstabilityError(Sunny.instability_message(swt, qs_supercell[b])))
+end
+
+# Completes a method of `Sunny.vendor_bogoliubov!` after its solver of Ĩ t = λ
+# H t for the first `nb` Hamiltonians. On entry, `T[:, :, b]` holds the
+# eigenvectors t with t† H t = 1, and `λ[:, b]` the eigenvalues in ascending
+# order, as LAPACK's zhegvd gives them. Where the `status` is still STATUS_OK,
+# it becomes STATUS_INERTIA unless exactly L of the λ are negative, by
+# Sylvester's law of inertia. Then T and E take the order, normalization and
+# energies of `Sunny.bogoliubov!`. Works on any backend that supports
+# broadcasting and indexing by a device vector.
+function Sunny.finish_vendor_bogoliubov!(T, E, λ, nb, status)
+    n = size(T, 1)
+    L = n ÷ 2
+    Tb = view(T, :, :, 1:nb)
+    λb = view(λ, :, 1:nb)
+    sb = view(status, 1:nb)
+
+    inertia = vec((view(λb, L:L, :) .< 0) .& (view(λb, L+1:L+1, :) .> 0))
+    sb .= ifelse.((sb .== STATUS_OK) .& .!inertia, STATUS_INERTIA, sb)
+
+    perm = KA.allocate(KA.get_backend(T), Int, n)
+    copyto!(perm, [L+1:2L; L:-1:1])
+    λp = λb[perm, :]
+    Tb .= Tb[:, perm, :] ./ sqrt.(abs.(reshape(λp, 1, n, nb)))
+    view(E, :, 1:nb) .= 1 ./ λp
+    return
 end
 
 # Copies to the host and calls LAPACK per wavevector, in Float64 whatever the

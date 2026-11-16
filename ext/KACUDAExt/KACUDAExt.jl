@@ -68,18 +68,10 @@ function Sunny.vendor_bogoliubov!(T::CuArray{ComplexF64, 3}, E::CuArray{Float64,
             CUDA.unsafe_free!(λs)
         end
 
-        # t = K⁻† y
+        # t = K⁻† y, then the inertia check, order, normalization and energies
+        # shared with other vendors
         trsm!('L', 'C')
-
-        # Exactly L of the λ are negative, by Sylvester's law of inertia
-        inertia = vec((view(λ, L:L, :) .< 0) .& (view(λ, L+1:L+1, :) .> 0))
-        status .= ifelse.(inertia, Int32(0), Int32(-2))
-
-        # The order, normalization and energies of `Sunny.bogoliubov!`
-        perm = CuArray([L+1:2L; L:-1:1])
-        λp = λ[perm, :]
-        Tb .= Tb[:, perm, :] ./ sqrt.(abs.(reshape(λp, 1, n, nb)))
-        view(E, :, 1:nb) .= 1 ./ λp
+        Sunny.finish_vendor_bogoliubov!(T, E, λ, nb, status)
     finally
         CUDA.unsafe_free!(Hp)
         CUDA.unsafe_free!(Tp)

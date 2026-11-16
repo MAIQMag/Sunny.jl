@@ -169,6 +169,48 @@ end
     @test_throws "Dipole-dipole interactions are not yet supported" to_device(SpinWaveTheory(sys; measure=ssf_trace(sys)))
 end
 
+# The steps shared by vendor eigensolvers, applied to the solution of LAPACK on
+# the host, reproduce `Sunny.bogoliubov!`
+@testitem "KAExt vendor Bogoliubov steps" begin
+    import KernelAbstractions
+    using LinearAlgebra: Hermitian, I, diagm, eigen
+    using Random: Xoshiro
+    KAExt = Base.get_extension(Sunny, :KAExt)
+
+    (L, nb) = (3, 4)
+    n = 2L
+    Ĩ = diagm([ones(L); -ones(L)])
+    rng = Xoshiro(0)
+    Hs = map(1:nb) do _
+        A = randn(rng, ComplexF64, n, n)
+        A * A' + I
+    end
+    T = zeros(ComplexF64, n, n, nb)
+    λ = zeros(n, nb)
+    for b in 1:nb
+        (λ[:, b], T[:, :, b]) = eigen(Hermitian(Ĩ), Hermitian(Hs[b]))
+    end
+    # Eigenvalues that are all positive break the inertia. A failure already
+    # recorded for another set is kept.
+    λ[:, 3] .= sort(abs.(λ[:, 3]))
+    status = Int32[0, 5, 0, 0]
+    E = zeros(n, nb)
+    Sunny.finish_vendor_bogoliubov!(T, E, λ, nb, status)
+    @test status == [KAExt.STATUS_OK, 5, KAExt.STATUS_INERTIA, KAExt.STATUS_OK]
+    for b in (1, 4)
+        T_h = zeros(ComplexF64, n, n)
+        E_h = Sunny.bogoliubov!(T_h, copy(Hs[b]))
+        @test E[:, b] ≈ E_h
+        # Para-unitary, T† Ĩ T = Ĩ, and each eigenvector is defined up to a phase
+        @test T[:, :, b]' * Ĩ * T[:, :, b] ≈ Ĩ
+        @test abs.(T[:, :, b]' * Ĩ * T_h) ≈ I(n) atol=1e-8
+    end
+
+    sys = System(Crystal(lattice_vectors(1, 1, 1, 90, 90, 90), [[0, 0, 0]]), [1 => Moment(s=1, g=2)], :dipole)
+    swt = SpinWaveTheory(sys; measure=nothing)
+    @test_throws "failed to converge" KAExt.throw_bogoliubov_status([KAExt.STATUS_OK, KAExt.STATUS_NOCONVERGE], swt, [[0, 0, 0], [0.5, 0, 0]])
+end
+
 @testitem "KAExt intensities on CUDA" tags=[:gpu, :cuda] setup=[KAModels] begin
     using .KAModels: fcc_afm, test_device_intensities, test_device_instability
     import CUDA

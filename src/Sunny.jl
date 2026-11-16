@@ -188,6 +188,11 @@ extension_fns = [
 # such as ext/KACUDAExt, and KAExt documents the status codes.
 function vendor_bogoliubov! end
 
+# The steps shared by methods of `vendor_bogoliubov!`, after a vendor solver of
+# Ĩ t = λ H t, as `finish_vendor_bogoliubov!(T, E, λ, nb, status)`. Defined by
+# ext/KAExt, which documents it.
+function finish_vendor_bogoliubov! end
+
 # Free memory in bytes of a KernelAbstractions backend, if known. Methods are
 # defined by ext/KAExt and backend-specific extensions such as ext/KACUDAExt,
 # ext/KAMetalExt and ext/KAAMDGPUExt.
