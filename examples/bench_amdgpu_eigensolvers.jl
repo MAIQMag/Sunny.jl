@@ -10,7 +10,12 @@
 #      :jacobi  the portable Jacobi kernel of KAExt
 #      :host    LAPACK on the host, threaded, with copies to and from the device
 #    Each run checks the energies against `Sunny.bogoliubov!` on the host, and
-#    the eigenvectors T by the residuals of T† Ĩ T = Ĩ and H T = Ĩ T diag(E).
+#    the eigenvectors T by the residuals of T† Ĩ T = Ĩ and H T = Ĩ T diag(E),
+#    and by the error of the spectral sum Σₖ tₖ tₖ† Eₖ over modes of positive
+#    energy, which, as intensities, is independent of the basis that a solver
+#    picks for degenerate modes.
+# 1b. As 1, on the Hamiltonians of spin wave theory for the fcc antiferromagnet
+#    of 2, which have degenerate modes, unlike random Hamiltonians.
 # 2. `intensities` end to end, for an fcc antiferromagnet in :dipole (n = 8)
 #    and :SUN (n = 40) modes, per eigensolver of `to_device`.
 #
@@ -108,10 +113,18 @@ const solvers = [
 ]
 const active_solvers = on_amd ? solvers : filter(s -> s.first in (:jacobi, :host), solvers)
 
+# Σₖ tₖ tₖ† Eₖ over the modes k of positive energy
+function spectral_sum(T, E)
+    pos = findall(>(0), E)
+    Tp = T[:, pos]
+    return Tp * Diagonal(E[pos]) * Tp'
+end
+
 # The largest residuals over the `sample` of the batch of para-unitarity,
 # T† Ĩ T = Ĩ, and of the eigenproblem, H T = Ĩ T diag(E), relative to the norms
-# of H and T
-function eigenvector_residuals(T, E, H, sample)
+# of H and T, and the largest relative error of `spectral_sum` against the
+# reference `S_ref`
+function eigenvector_residuals(T, E, H, sample, S_ref)
     n = size(H, 1)
     L = n ÷ 2
     Ĩ = Diagonal([ones(L); -ones(L)])
@@ -123,22 +136,32 @@ function eigenvector_residuals(T, E, H, sample)
         (Tb, Hb) = (ComplexF64.(T[:, :, b]), H[:, :, b])
         norm(Hb * Tb - Ĩ * Tb * Diagonal(E[:, b])) / (norm(Hb) * norm(Tb))
     end
-    return (punit, resid)
+    serr = maximum(zip(sample, S_ref)) do (b, S)
+        norm(spectral_sum(ComplexF64.(T[:, :, b]), Float64.(E[:, b])) - S) / norm(S)
+    end
+    return (punit, resid, serr)
 end
 
 free_memory() = on_amd ? AMDGPU.free() : Int(Sys.free_memory())
 
-function bench_solvers(n, F, nb)
-    H0_h = random_hamiltonians(n, nb)
+function bench_solvers(H0_h, F)
+    (n, _, nb) = size(H0_h)
     H0 = to_dev(Complex{F}.(H0_h))
     (H, T, W) = (similar(H0), similar(H0), similar(H0))
     E = KA.allocate(backend, F, (n, nb))
     status = KA.allocate(backend, Int32, nb)
     t_copy = best_time(() -> copyto!(H, H0))
 
-    # Reference energies on the host, in Float64, for a sample of the batch
+    # Reference energies and spectral sums on the host, in Float64, for a
+    # sample of the batch
     sample = unique(round.(Int, range(1, nb, 16)))
-    E_ref = [Sunny.bogoliubov!(zeros(ComplexF64, n, n), copy(H0_h[:, :, b])) for b in sample]
+    (E_ref, S_ref) = (Vector{Float64}[], Matrix{ComplexF64}[])
+    for b in sample
+        T_ref = zeros(ComplexF64, n, n)
+        e = Sunny.bogoliubov!(T_ref, copy(H0_h[:, :, b]))
+        push!(E_ref, e)
+        push!(S_ref, spectral_sum(T_ref, e))
+    end
 
     for (name, solve!) in active_solvers
         result = try
@@ -151,9 +174,9 @@ function bench_solvers(n, F, nb)
             E_h = Array(E)
             T_h = Array(T)
             err = maximum(maximum(abs, E_h[:, b] - e) / maximum(abs, e) for (b, e) in zip(sample, E_ref))
-            (punit, resid) = eigenvector_residuals(T_h, E_h, H0_h, sample)
+            (punit, resid, serr) = eigenvector_residuals(T_h, E_h, H0_h, sample, S_ref)
             ws = name in (:vendor, :hegvd, :hegvj) ? @sprintf("%8.2f", rocblas_workspace() / nb / 1024) : "       -"
-            @sprintf("%10.2f %10.3f %9.1e %9.1e %9.1e %8d %s", 1e3t, 1e6t / nb, err, punit, resid, nfail, ws)
+            @sprintf("%10.2f %10.3f %9.1e %9.1e %9.1e %9.1e %8d %s", 1e3t, 1e6t / nb, err, punit, resid, serr, nfail, ws)
         catch e
             "failed: " * first(sprint(showerror, e), 120)
         end
@@ -176,6 +199,18 @@ function fcc_afm(mode)
     set_dipole!(sys, (-1, -1, 1), position_to_site(sys, (1/2, 0, 1/2)))
     set_dipole!(sys, (-1, 1, -1), position_to_site(sys, (0, 1/2, 1/2)))
     return sys
+end
+
+# Hamiltonians of spin wave theory at `nq` random wavevectors
+function swt_hamiltonians(swt, nq)
+    n = 2Sunny.nbands(swt)
+    H = Array{ComplexF64}(undef, n, n, nq)
+    rng = Xoshiro(2)
+    for b in 1:nq
+        q_supercell = Sunny.to_supercell_rlu(swt.sys, rand(rng, 3))
+        Sunny.hamiltonian_matrix!(view(H, :, :, b), swt, q_supercell)
+    end
+    return H
 end
 
 function bench_intensities(mode)
@@ -209,14 +244,24 @@ on_amd ? println("Device: ", AMDGPU.device()) : println("No functional AMD GPU: 
 println()
 
 println("1. Eigensolvers alone. Times exclude the copy of H; ws is rocBLAS workspace per matrix.")
-println("   n F            nb  solver    ms total  µs/matrix   rel.err  T'ĨT-Ĩ  HT-ĨTE  #status  ws KiB")
+const header = "   n F            nb  solver    ms total  µs/matrix   rel.err   T'ĨT-Ĩ    HT-ĨTE  Σtt†E err  #status  ws KiB"
+println(header)
 for n in ns, F in precisions, nb in nbs
     nb_max = free_memory() ÷ 2 ÷ (4n^2 * sizeof(Complex{F}))
     if nb > nb_max
         @printf("%4d %-8s %8d  skipped: exceeds the memory cap of %d matrices\n", n, F, nb, nb_max)
         continue
     end
-    bench_solvers(n, F, nb)
+    bench_solvers(random_hamiltonians(n, nb), F)
+end
+println()
+
+println("1b. As 1, on the Hamiltonians of spin wave theory for the fcc antiferromagnet")
+println(header)
+for mode in (:dipole, :SUN), F in precisions
+    sys = fcc_afm(mode)
+    swt = SpinWaveTheory(sys; measure=ssf_perp(sys))
+    bench_solvers(swt_hamiltonians(swt, nbs[end] ÷ 10), F)
 end
 println()
 
