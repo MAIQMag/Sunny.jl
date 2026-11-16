@@ -5,7 +5,7 @@ on:
     types: [created]
 
 jobs:
-  excl-cousteau-MI100:
+  excl-cousteau-mi100:
     if: |
       github.repository_owner == 'MAIQMag' &&
       github.event.issue.pull_request &&
