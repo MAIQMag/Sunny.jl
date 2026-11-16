@@ -19,6 +19,7 @@ jobs:
       JULIA_DEPOT_PATH: /home/svh/.julia-zenith
       CUDA_HOME: /opt/nvidia/hpc_sdk/Linux_x86_64/26.3/cuda/13.1
       JULIA_DEBUG: CUDA_Runtime_Discovery
+      SUNNY_TEST_GPU: CUDA
     strategy:
       fail-fast: false
       matrix:
@@ -78,9 +79,13 @@ jobs:
         if: steps.check.outputs.triggered == 'true'
         run: |
           printenv
-          julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.add(["CUDA", "KernelAbstractions"])'
-          julia --project -e 'using CUDA; CUDA.set_runtime_version!(v"13.1"; local_toolkit=true)'
-          julia --project -e 'using CUDA; CUDA.versioninfo()'
+          julia --project -e 'using Pkg; Pkg.instantiate()'
+          # CUDA is a weak dependency of Sunny, and GPU testitems import it,
+          # so add it to the test environment only
+          julia --project=test -e 'using Pkg; Pkg.develop(path="."); Pkg.add("CUDA")'
+          julia --project=test -e 'using CUDA; CUDA.set_runtime_version!(v"13.1"; local_toolkit=true)'
+          cp test/LocalPreferences.toml LocalPreferences.toml
+          julia --project=test -e 'using CUDA; CUDA.versioninfo()'
 
       - name: Cache Julia
         if: steps.check.outputs.triggered == 'true'
@@ -96,7 +101,7 @@ jobs:
         if: steps.check.outputs.triggered == 'true'
         uses: julia-actions/julia-processcoverage@v1
         with:
-          directories: src,ext/CUDAExt,ext/KAExt
+          directories: src,ext/KAExt,ext/KACUDAExt
 
       - name: Upload Coverage
         if: steps.check.outputs.triggered == 'true'
