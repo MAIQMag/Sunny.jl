@@ -12,7 +12,10 @@
 #    and :SUN (n = 40) modes, per eigensolver of `to_device`.
 #
 # Setup, from the Sunny.jl root:
-#   julia --project=bench -e 'using Pkg; Pkg.develop(path="."); Pkg.add(["AMDGPU", "KernelAbstractions"])'
+#   julia --project=bench -e 'using Pkg; Pkg.develop(path="."); Pkg.add(["AMDGPU", "KernelAbstractions", "MKL"])'
+# MKL is the BLAS that `load_blas_for_threading` loads on x86_64, and
+# AppleAccelerate on macOS, in place of OpenBLAS, which scales poorly under
+# threads on small matrices.
 # Run, with threads for the :host eigensolver and the CPU baseline:
 #   julia --project=bench -t 16 examples/bench_amdgpu_eigensolvers.jl          # full
 #   julia --project=bench -t 16 examples/bench_amdgpu_eigensolvers.jl quick    # smaller sizes
@@ -22,6 +25,9 @@
 using Sunny, LinearAlgebra, Random, Printf
 import AMDGPU, KernelAbstractions as KA
 using AMDGPU: ROCArray, rocBLAS, rocSOLVER
+
+# For the threaded :host eigensolver and the CPU baseline
+load_blas_for_threading()
 
 const KAExt = Base.get_extension(Sunny, :KAExt)
 const on_amd = AMDGPU.functional()
@@ -177,6 +183,7 @@ function bench_intensities(mode)
 end
 
 println("Julia $VERSION, $(Threads.nthreads()) threads, backend $backend")
+println("BLAS: ", join([basename(lib.libname) for lib in BLAS.get_config().loaded_libs], ", "))
 on_amd ? println("Device: ", AMDGPU.device()) : println("No functional AMD GPU: smoke test on the CPU backend")
 println()
 
