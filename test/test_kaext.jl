@@ -30,8 +30,8 @@
     # `Sunny.bogoliubov!` on random positive definite Hamiltonians, acting on
     # only the first nb of a larger batch, and reports the status codes of a
     # non-finite H and a H that is not positive definite.
-    function test_vendor_bogoliubov(backend, F)
-        (L, nb) = (4, 5)
+    function test_vendor_bogoliubov(backend, F; L=4)
+        nb = 5
         n = 2L
         Ĩ = diagm([ones(L); -ones(L)])
         rng = Xoshiro(0)
@@ -286,15 +286,17 @@ end
 end
 
 # AMD GPUs support Float64, which is the default precision. The vendor
-# eigensolver is rocSOLVER's batched hegvd, in either precision.
+# eigensolver is rocSOLVER's batched hegvj for n ≤ 40 and hegvd beyond, in
+# either precision.
 @testitem "KAExt intensities on AMDGPU" tags=[:gpu, :amdgpu] setup=[KAModels] begin
     using .KAModels: fcc_afm, entangled_dimers, test_device_intensities, test_device_instability, test_vendor_bogoliubov
     import AMDGPU
     backend = AMDGPU.ROCBackend()
 
     @test Sunny.device_precision(backend) == Float64
-    for precision in (Float64, Float32)
-        test_vendor_bogoliubov(backend, precision)
+    # n = 8 with hegvj, and n = 48 with hegvd
+    for precision in (Float64, Float32), L in (4, 24)
+        test_vendor_bogoliubov(backend, precision; L)
     end
     for eigensolver in (:vendor, :jacobi, :host), precision in (Float64, Float32)
         for mode in (:dipole, :SUN)

@@ -94,7 +94,10 @@ end
 # and its cost grows as n³ for n×n matrices. On an NVIDIA P5000, it outpaced
 # LAPACK on the host by 4× for n = 8, but lagged 10× for n = 64. It lagged
 # cuSOLVER for all n, e.g. 2.9 s vs 2.2 s for 200k matrices with n = 8, and 8.9
-# s vs 1.6 s for 100k matrices with n = 16.
+# s vs 1.6 s for 100k matrices with n = 16. On an AMD MI100, it outpaced LAPACK
+# on the host (MKL, 16 threads) by 3.3× for n = 8, and matched it for n = 16
+# and 40. It lagged rocSOLVER for all n, e.g. 1.7 vs 0.37 µs per matrix for
+# n = 8, and 337 vs 44 µs for n = 40, with 100k matrices in Float64.
 function resolve_eigensolver(backend, eigensolver, n, F)
     if isnothing(eigensolver)
         backend isa KA.CPU && return :host
@@ -103,7 +106,7 @@ function resolve_eigensolver(backend, eigensolver, n, F)
     end
     eigensolver in (:host, :jacobi, :vendor) || error("Unknown eigensolver $(repr(eigensolver)); use :host, :jacobi or :vendor")
     if eigensolver == :vendor && !has_vendor_bogoliubov(backend, F)
-        error("No vendor eigensolver for $backend in $F; load its package (e.g. CUDA) or use :jacobi")
+        error("No vendor eigensolver for $backend in $F; load its package (e.g. CUDA or AMDGPU) or use :jacobi")
     end
     return eigensolver
 end
@@ -128,8 +131,9 @@ which lacks `Float64`. Intensities returned to the host are `Float64` in either
 case.
 
 The batched `eigensolver` for the Bogoliubov transformation may be `:host`
-(LAPACK on the host), `:vendor` (e.g. cuSOLVER, the default when an extension
-provides it), or `:jacobi` (a portable kernel, efficient for small matrices).
+(LAPACK on the host), `:vendor` (cuSOLVER or rocSOLVER, the default when CUDA
+or AMDGPU is loaded), or `:jacobi` (a portable kernel, efficient for small
+matrices).
 The default is `:host` for `KernelAbstractions.CPU()`. Otherwise it is
 `:vendor` if available, else `:jacobi` for at most 4 bands and `:host` beyond.
 

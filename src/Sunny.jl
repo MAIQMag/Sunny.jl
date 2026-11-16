@@ -184,8 +184,8 @@ extension_fns = [
 ]
 
 # Batched Bogoliubov transformation by a vendor library, as
-# `vendor_bogoliubov!(T, E, H, nb, status)`. Methods are defined by extensions
-# such as ext/KACUDAExt, and KAExt documents the status codes.
+# `vendor_bogoliubov!(T, E, H, nb, status)`. Methods are defined by
+# ext/KACUDAExt and ext/KAAMDGPUExt, and KAExt documents the status codes.
 function vendor_bogoliubov! end
 
 # The steps shared by methods of `vendor_bogoliubov!`, after a vendor solver of
