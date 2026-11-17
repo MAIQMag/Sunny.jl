@@ -174,6 +174,26 @@ end
         end
     end
 
+    # Néel order of CoRh₂O₄, whose Goldstone mode at q = 0 the regularization
+    # stabilizes in Float32 as well as Float64. The Float32 shift changes
+    # intensities near the mode, by about 4e-4 relative to all intensities at
+    # these wavevectors, two of which are at or near the mode.
+    a = 8.5031
+    cryst = Crystal(lattice_vectors(a, a, a, 90, 90, 90), [[1/8, 1/8, 1/8]], 227)
+    sys = System(cryst, [1 => Moment(s=3/2, g=2)], :dipole; seed=0)
+    set_exchange!(sys, 0.63, Bond(2, 3, [0, 0, 0]))
+    randomize_spins!(sys)
+    minimize_energy!(sys)
+    sys = reshape_supercell(sys, primitive_cell(cryst))
+    swt = SpinWaveTheory(sys; measure=ssf_perp(sys))
+    @test Sunny.energy_per_site(sys) ≈ -2 * 0.63 * (3/2)^2
+    qs = [[0, 0, 0], [0.1, 0, 0], [0.5, 0.5, 0]]
+    res = intensities(swt, qs; energies=range(0, 6, 50), kernel=lorentzian(fwhm=0.8))
+    for precision in (Float64, Float32), eigensolver in (:host, :jacobi)
+        res_d = intensities(to_device(swt; backend, eigensolver, precision), qs; energies=range(0, 6, 50), kernel=lorentzian(fwhm=0.8))
+        @test res_d.data ≈ res.data rtol=(precision == Float64 ? 1e-10 : 1e-3)
+    end
+
     # Entangled units, whose observables have several parts
     sys = entangled_dimers()
     test_device_intensities(SpinWaveTheory(sys; measure=ssf_perp(sys)), backend)

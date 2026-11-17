@@ -128,7 +128,9 @@ KernelAbstractions `backend`, e.g., `CUDABackend()`. The calculation of
 The floating point `precision` of the device data and arithmetic may be
 `Float64` or `Float32`. The default is `Float64`, except `Float32` for Metal,
 which lacks `Float64`. Intensities returned to the host are `Float64` in either
-case.
+case. In `Float32`, the `regularization` of `swt` is raised to at least the
+rounding error of its Hamiltonian, so that modes of vanishing energy, e.g.
+Goldstone modes, remain stable.
 
 The batched `eigensolver` for the Bogoliubov transformation may be `:host`
 (LAPACK on the host), `:vendor` (cuSOLVER or rocSOLVER, the default when CUDA
@@ -175,9 +177,21 @@ function Sunny.to_device(swt::Sunny.SpinWaveTheory; backend=KA.CPU(), eigensolve
         coefs        = to_backend(backend, F, observable_coefs),
         positions    = to_backend(backend, F, positions),
         formfactors  = to_backend(backend, formfactors),
+        regularization = device_regularization(swt, F),
     )
     eigensolver = resolve_eigensolver(backend, eigensolver, 2Sunny.nbands(swt), F)
     return SpinWaveTheoryDevice{F}(swt, backend, eigensolver, measure_mode, data)
+end
+
+# The shift of the diagonal of the Hamiltonian in precision F. Rounding H to F
+# perturbs it by about eps(F) times its spectral scale. In Float32, this
+# exceeds the default `swt.regularization` of 1e-8, so H may be indefinite at a
+# Goldstone mode, and the shift is raised to that perturbation. For the Néel
+# order of CoRh₂O₄ on Metal, a third of it sufficed. The shift changes gapped
+# energies in proportion, and intensities near a Goldstone mode with its square
+# root, e.g. by 4e-5 relative to all intensities along a path through q = 0.
+function device_regularization(swt, F)
+    return F(max(swt.regularization, eps(F) * Sunny.spectral_scale(swt)))
 end
 
 Sunny.to_device(x; _...) = error("`to_device` is not supported for $(typeof(x))")

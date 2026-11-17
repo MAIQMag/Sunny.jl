@@ -259,7 +259,7 @@ function swt_hamiltonians_device(swt, qs, F)
     H = KA.allocate(backend, Complex{F}, (n, n, length(qs)))
     qs_supercell = KAExt.to_backend(backend, F, [Sunny.to_supercell_rlu(swt.sys, q) for q in qs])
     KAExt.build_hamiltonian!(backend)(H, data.rowptr, data.cols, data.offset_index, data.vals, data.offsets,
-                                      qs_supercell, F(swt.regularization); ndrange=(n, length(qs)))
+                                      qs_supercell, data.regularization; ndrange=(n, length(qs)))
     KA.synchronize(backend)
     return Array(H)
 end

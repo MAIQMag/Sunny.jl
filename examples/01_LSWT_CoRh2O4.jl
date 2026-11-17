@@ -17,6 +17,7 @@
 # for graphics.
 
 using Sunny, GLMakie
+load_blas_for_threading()
 
 # If these packages are not yet installed, Julia will offer to install them. If
 # executing this tutorial gives an error, you may need to update Sunny and
@@ -153,7 +154,7 @@ path = q_space_path(cryst, qs, 500)
 # result.
 
 energies = range(0, 6, 300)
-res = intensities(swt, path; energies, kernel)
+res = intensities(swt, path; energies, kernel, kT=0, threaded=true)
 plot_intensities(res; units, title="CoRh₂O₄ Broadened Spin Waves")
 
 # Sometimes experimental data is only available as a powder average, i.e., as an
@@ -166,7 +167,7 @@ plot_intensities(res; units, title="CoRh₂O₄ Broadened Spin Waves")
 
 radii = range(0, 3, 200) # (1/Å)
 res = powder_average(cryst, radii, 2000) do qs
-    intensities(swt, qs; energies, kernel)
+    intensities(swt, qs; energies, kernel, kT=0, threaded=true)
 end
 plot_intensities(res; units, saturation=1.0, title="CoRh₂O₄ Powder Average")
 
@@ -175,6 +176,69 @@ plot_intensities(res; units, saturation=1.0, title="CoRh₂O₄ Powder Average")
 # ```@raw html
 # <img width="95%" src="https://raw.githubusercontent.com/SunnySuite/Sunny.jl/main/docs/src/assets/CoRh2O4_intensity.jpg">
 # ```
+
+# ### Calculations on a GPU
+#
+# Loading [KernelAbstractions](https://github.com/JuliaGPU/KernelAbstractions.jl)
+# enables `to_device`, which copies the spin wave model to a GPU. Load
+# the package for your GPU, e.g., CUDA for NVIDIA, AMDGPU for AMD, or Metal for
+# Apple silicon. Here we use the first one that is installed and functional,
+# and otherwise the CPU backend of KernelAbstractions.
+
+using KernelAbstractions
+try @eval using CUDA catch end
+try @eval using AMDGPU catch end
+try @eval using Metal catch end
+backend = if @isdefined(CUDA) && CUDA.functional()
+    CUDABackend()
+elseif @isdefined(AMDGPU) && AMDGPU.functional()
+    ROCBackend()
+elseif @isdefined(Metal) && Metal.functional()
+    MetalBackend()
+else
+    KernelAbstractions.CPU()
+end
+swt_d = to_device(swt; backend)
+
+# The device model `swt_d` replaces `swt` in calls to [`intensities`](@ref).
+# Inside [`powder_average`](@ref), the option `batch_size` passes the points of
+# several shells to each call, which gives the GPU more work at once.
+
+res_d = intensities(swt_d, path; energies, kernel)
+res_powder_d = powder_average(cryst, radii, 2000; batch_size=50) do qs
+    intensities(swt_d, qs; energies, kernel)
+end
+plot_intensities(res_powder_d; units, saturation=1.0, title="CoRh₂O₄ Powder Average on $backend")
+
+# The results agree with those on the host to within the precision of the
+# device, which is `Float32` for Metal and `Float64` otherwise. Compare the
+# times of both calculations, each the best of three runs after a warm-up, to
+# the serial host calculations above.
+
+besttime(f) = (f(); minimum(@elapsed(f()) for _ in 1:3))
+function powder_host()
+    powder_average(cryst, radii, 2000) do qs
+        intensities(swt, qs; energies, kernel, kT=0, threaded=true)
+    end
+end
+function powder_device()
+    powder_average(cryst, radii, 2000; batch_size=50) do qs
+        intensities(swt_d, qs; energies, kernel)
+    end
+end
+relerr(a, b) = sqrt(sum(abs2, a - b) / sum(abs2, b))
+
+res_path = intensities(swt, path; energies, kernel)
+res_powder = powder_host()
+for (name, f_host, f_device, res_h, res_dev) in (
+        ("Path", () -> intensities(swt, path; energies, kernel, kT=0, threaded=true), () -> intensities(swt_d, path; energies, kernel), res_path, res_d),
+        ("Powder average", powder_host, powder_device, res_powder, res_powder_d))
+    t_host = besttime(f_host)
+    t_device = besttime(f_device)
+    println(rpad(name, 16), "host ", round(t_host; sigdigits=3), " s, device ", round(t_device; sigdigits=3),
+            " s, speedup ", round(t_host / t_device; digits=1), "×, relative difference ",
+            round(relerr(res_dev.data, res_h.data); sigdigits=2))
+end
 
 
 # ### What's next?

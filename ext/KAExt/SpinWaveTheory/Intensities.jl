@@ -120,7 +120,7 @@ function susceptibility_poles_device(swt_d::SpinWaveTheoryDevice, qpts; batch_si
         qs_global_d = to_backend(backend, F, qs_global)
 
         build_hamiltonian!(backend)(H, data.rowptr, data.cols, data.offset_index, data.vals, data.offsets,
-                                    qs_supercell_d, F(swt.regularization); ndrange=(n, nb))
+                                    qs_supercell_d, data.regularization; ndrange=(n, nb))
         KA.synchronize(backend)
         bogoliubov_batched!(T, E, H, nb, swt_d, qs_supercell; threaded)
 
