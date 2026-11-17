@@ -113,7 +113,9 @@ and call [`intensities`](@ref) or [`intensities_static`](@ref).
 
 Each call to `f` receives the points of `batch_size` shells, concatenated.
 Larger batches can be more efficient for a calculation on a GPU, and give the
-same result.
+same result. On a GPU, `f` may also call `intensities` with `output=:device`,
+so that the average over each shell runs on the device, and only the averages
+are copied to the host.
 
 # Example
 ```julia
@@ -126,14 +128,13 @@ plot_intensities(res)
 """
 function powder_average(f, cryst, radii, n::Int; seed=0, batch_size=1)
     res = f([Vec3(0,0,0)]) # Dummy call to learn types
-    if res isa Intensities
-        data = zeros(eltype(res.data), length(res.energies), length(radii))
-        ret = PowderIntensities(cryst, collect(radii), res.energies, data)
-    elseif res isa StaticIntensities
-        data = zeros(eltype(res.data), length(radii))
+    means = shell_means(res, 1, 1)
+    if res isa StaticIntensities
+        data = zeros(eltype(means), length(radii))
         ret = PowderStaticIntensities(cryst, collect(radii), data)
     else
-        error("Provided function must call `intensities` or `intensities_static`.")
+        data = zeros(eltype(means), length(res.energies), length(radii))
+        ret = PowderIntensities(cryst, collect(radii), res.energies, data)
     end
 
     rng = Random.Xoshiro(seed)
@@ -142,16 +143,18 @@ function powder_average(f, cryst, radii, n::Int; seed=0, batch_size=1)
     for is in Iterators.partition(eachindex(radii), batch_size)
         # One random rotation per shell, in order, independent of batching
         qs = reduce(vcat, [Ref(to_rlu * Mat3(random_orthogonal(rng, 3)) * radii[i]) .* sphpts for i in is])
-        res = f(qs)
-        if res isa Intensities
-            data[:, is] .= dropdims(Statistics.mean(reshape(res.data, :, n, length(is)); dims=2); dims=2)
-        else
-            data[is] .= vec(Statistics.mean(reshape(res.data, n, length(is)); dims=1))
-        end
+        selectdim(data, ndims(data), is) .= shell_means(f(qs), n, length(is))
     end
 
     return ret
 end
+
+# The mean of the intensities `res` over each of `m` shells of `n` consecutive
+# wavevectors, as an array on the host whose last dimension is the shell. KAExt
+# extends it to intensities on a device.
+shell_means(res::Intensities, n, m) = dropdims(Statistics.mean(reshape(res.data, :, n, m); dims=2); dims=2)
+shell_means(res::StaticIntensities, n, m) = vec(Statistics.mean(reshape(res.data, n, m); dims=1))
+shell_means(_, n, m) = error("Provided function must call `intensities` or `intensities_static`.")
 
 #
 #     rotation_in_rlu(cryst::Crystal, (axis, angle))

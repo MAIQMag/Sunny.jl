@@ -179,25 +179,10 @@ const KAExt = Base.get_extension(Sunny, :KAExt)
 # The results agree with those on the host to within the precision of the
 # device, which is `Float32` for Metal and `Float64` otherwise.
 #
-# `powder_average` copies the intensities of every point on every shell back to
-# the host, and averages them there. With `output=:device`, the average over
-# each shell can instead run on the device, so that only one spectrum per shell
-# is copied. This reproduces `powder_average`, with the same random rotation
-# per shell.
-
-function powder_average_device(swt_d, cryst, radii, n; seed=0, batch_size=50, energies, kernel)
-    rng = Sunny.Random.Xoshiro(seed)
-    sphpts = Sunny.sphere_points(n)
-    to_rlu = inv(cryst.recipvecs)
-    data = zeros(length(energies), length(radii))
-    for is in Iterators.partition(eachindex(radii), batch_size)
-        qs = reduce(vcat, [Ref(to_rlu * Sunny.Mat3(Sunny.random_orthogonal(rng, 3)) * radii[i]) .* sphpts for i in is])
-        res = intensities(swt_d, qs; energies, kernel, output=:device)
-        avg = sum(reshape(res.data, length(energies), n, length(is)); dims=2) ./ n
-        data[:, is] .= Array(dropdims(avg; dims=2))
-    end
-    return Sunny.PowderIntensities(cryst, collect(radii), collect(Float64, energies), data)
-end
+# By default, `powder_average` copies the intensities of every point on every
+# shell back to the host, and averages them there. With `output=:device`, the
+# average over each shell runs on the device, and only one spectrum per shell
+# is copied.
 
 # Compare the times of the calculations, each the best of three runs after a
 # warm-up, to the threaded host calculations above.
@@ -213,7 +198,11 @@ function powder_device()
         intensities(swt_d, qs; energies, kernel)
     end
 end
-powder_device_avg() = powder_average_device(swt_d, cryst, radii, 2000; energies, kernel)
+function powder_device_avg()
+    powder_average(cryst, radii, 2000; batch_size=50) do qs
+        intensities(swt_d, qs; energies, kernel, output=:device)
+    end
+end
 relerr(a, b) = sqrt(sum(abs2, a - b) / sum(abs2, b))
 
 println(Sunny.nsites(swt.sys), " sites (n = ", 2Sunny.nbands(swt), ") on ", backend, " in ", KAExt.precision_of(swt_d),

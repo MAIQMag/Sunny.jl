@@ -194,6 +194,20 @@ end
         @test res_d.data ≈ res.data rtol=(precision == Float64 ? 1e-10 : 1e-3)
     end
 
+    # A powder average from intensities on device, averaged there or on the
+    # host, reproduces the one on the host
+    sys = fcc_afm(:dipole)
+    swt = SpinWaveTheory(sys; measure=ssf_perp(sys))
+    cryst = sys.crystal
+    (radii, energies, kernel) = (range(0, 2, 7), range(0, 10, 20), gaussian(fwhm=1.0))
+    res = powder_average(qs -> intensities(swt, qs; energies, kernel), cryst, radii, 30)
+    for precision in (Float64, Float32), output in (:host, :device)
+        swt_d = to_device(swt; backend, precision)
+        res_d = powder_average(qs -> intensities(swt_d, qs; energies, kernel, output), cryst, radii, 30; batch_size=3)
+        @test res_d isa Sunny.PowderIntensities{Float64}
+        @test res_d.data ≈ res.data rtol=(precision == Float64 ? 1e-12 : 1e-4)
+    end
+
     # Entangled units, whose observables have several parts
     sys = entangled_dimers()
     test_device_intensities(SpinWaveTheory(sys; measure=ssf_perp(sys)), backend)
