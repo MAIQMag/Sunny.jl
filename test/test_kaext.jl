@@ -264,17 +264,24 @@ end
     import CUDA
     backend = CUDA.CUDABackend()
 
-    test_vendor_bogoliubov(backend, Float64)
-
-    for eigensolver in (:vendor, :jacobi, :host)
+    # n = 8 and n = 48
+    for precision in (Float64, Float32), L in (4, 24)
+        test_vendor_bogoliubov(backend, precision; L)
+    end
+    for eigensolver in (:vendor, :jacobi, :host), precision in (Float64, Float32)
         for mode in (:dipole, :SUN)
             sys = fcc_afm(mode)
             swt = SpinWaveTheory(sys; measure=ssf_perp(sys; formfactors=[1 => FormFactor("Co2")]))
-            test_device_intensities(swt, backend; eigensolver)
+            test_device_intensities(swt, backend; eigensolver, precision)
         end
-        test_device_instability(backend; eigensolver)
+        test_device_instability(backend; eigensolver, precision)
     end
-    @test to_device(SpinWaveTheory(fcc_afm(:dipole); measure=nothing); backend).eigensolver == :vendor
+
+    # cuSOLVER is the default eigensolver in both precisions
+    swt = SpinWaveTheory(fcc_afm(:dipole); measure=nothing)
+    for precision in (Float64, Float32)
+        @test to_device(swt; backend, precision).eigensolver == :vendor
+    end
 end
 
 @testitem "KAAMDGPUExt loads" tags=[:gpu, :amdgpu] begin
