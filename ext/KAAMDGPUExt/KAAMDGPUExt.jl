@@ -18,8 +18,8 @@ hegvj_strided_batched(::Type{Float32}) = rocSOLVER.rocsolver_chegvj_strided_batc
 # n = 8, 16 and 40 on an MI100, and by 3.9×, 2.7× and 1.8× on an MI300A. For
 # n = 64, it was 1.3× slower on the MI100, and as fast on the MI300A. Its errors
 # in the energies were larger, but small: about 1e-14 vs 2e-15 in Float64, and
-# 6e-6 vs 1e-6 in Float32.
-const HEGVJ_MAX_N = 40
+# 6e-6 vs 1e-6 in Float32. A Ref, so that benchmarks can change it.
+const HEGVJ_MAX_N = Ref(40)
 
 # Sweeps of hegvj before it reports no convergence
 const HEGVJ_MAX_SWEEPS = Int32(100)
@@ -58,7 +58,7 @@ function Sunny.vendor_bogoliubov!(T::ROCArray{Complex{F}, 3}, E::ROCArray{F, 2},
     # whose first nb entries it fills
     λ = ROCMatrix{F}(undef, n, nb)
     try
-        if n <= HEGVJ_MAX_N
+        if n <= HEGVJ_MAX_N[]
             hegvj!(T, H, λ, status, nb)
         else
             hegvd!(T, H, λ, status, nb)

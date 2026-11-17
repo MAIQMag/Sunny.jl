@@ -11,9 +11,9 @@
 #      :host    LAPACK on the host, threaded, with copies to and from the device
 #    Each run checks the energies against `Sunny.bogoliubov!` on the host, and
 #    the eigenvectors T by the residuals of T† Ĩ T = Ĩ and H T = Ĩ T diag(E),
-#    and by the error of the spectral sum Σₖ tₖ tₖ† Eₖ over modes of positive
-#    energy, which, as intensities, is independent of the basis that a solver
-#    picks for degenerate modes.
+#    and by the errors of the spectral sums Σₖ tₖ tₖ† Eₖ over modes of positive
+#    energy, and over those of negative energy, which, as intensities, are
+#    independent of the basis that a solver picks for degenerate modes.
 # 1b. As 1, on the Hamiltonians of spin wave theory for the fcc antiferromagnet
 #    of 2, at its wavevectors, which have degenerate modes, unlike random
 #    Hamiltonians. As in `intensities`, the Hamiltonians are built on device, in
@@ -23,7 +23,8 @@
 #    vendor solvers report the wavevector of the largest error of the spectral
 #    sum, with the smallest gap between its positive energies.
 # 2. `intensities` end to end, for an fcc antiferromagnet in :dipole (n = 8)
-#    and :SUN (n = 40) modes, per eigensolver of `to_device`.
+#    and :SUN (n = 40) modes, per eigensolver of `to_device`. On AMD, :vendor
+#    runs twice, with hegvj for n ≤ 40 (the default) and with hegvd for all n.
 #
 # Setup, from the Sunny.jl root:
 #   julia --project=bench -e 'using Pkg; Pkg.develop(path="."); Pkg.add(["AMDGPU", "KernelAbstractions", "MKL"])'
@@ -119,9 +120,10 @@ const solvers = [
 ]
 const active_solvers = on_amd ? solvers : filter(s -> s.first in (:jacobi, :host), solvers)
 
-# Σₖ tₖ tₖ† Eₖ over the modes k of positive energy
-function spectral_sum(T, E)
-    pos = findall(>(0), E)
+# Σₖ tₖ tₖ† Eₖ over the modes k of positive energy, or of negative energy if
+# `sign` is -1
+function spectral_sum(T, E; sign=1)
+    pos = findall(e -> sign * e > 0, E)
     Tp = T[:, pos]
     return Tp * Diagonal(E[pos]) * Tp'
 end
@@ -129,8 +131,8 @@ end
 # The largest residuals over the `sample` of the batch of para-unitarity,
 # T† Ĩ T = Ĩ, and of the eigenproblem, H T = Ĩ T diag(E), relative to the norms
 # of H and T, and the largest relative error of `spectral_sum` against the
-# reference `S_ref`
-function eigenvector_residuals(T, E, H, sample, S_ref)
+# reference `S_ref`, and of that over negative energies against `Sneg_ref`
+function eigenvector_residuals(T, E, H, sample, S_ref, Sneg_ref)
     n = size(H, 1)
     L = n ÷ 2
     Ĩ = Diagonal([ones(L); -ones(L)])
@@ -146,7 +148,10 @@ function eigenvector_residuals(T, E, H, sample, S_ref)
         norm(spectral_sum(ComplexF64.(T[:, :, b]), Float64.(E[:, b])) - S) / norm(S)
     end
     (serr, i) = findmax(serrs)
-    return (punit, resid, serr, i)
+    snegerr = maximum(zip(sample, Sneg_ref)) do (b, S)
+        norm(spectral_sum(ComplexF64.(T[:, :, b]), Float64.(E[:, b]); sign=-1) - S) / norm(S)
+    end
+    return (punit, resid, serr, snegerr, i)
 end
 
 free_memory() = on_amd ? AMDGPU.free() : Int(Sys.free_memory())
@@ -164,12 +169,13 @@ function bench_solvers(H0_h, F; qs=nothing)
     # Reference energies and spectral sums on the host, in Float64, for a
     # sample of the batch
     sample = isnothing(qs) ? unique(round.(Int, range(1, nb, 16))) : collect(1:nb)
-    (E_ref, S_ref) = (Vector{Float64}[], Matrix{ComplexF64}[])
+    (E_ref, S_ref, Sneg_ref) = (Vector{Float64}[], Matrix{ComplexF64}[], Matrix{ComplexF64}[])
     for b in sample
         T_ref = zeros(ComplexF64, n, n)
         e = Sunny.bogoliubov!(T_ref, copy(H0_h[:, :, b]))
         push!(E_ref, e)
         push!(S_ref, spectral_sum(T_ref, e))
+        push!(Sneg_ref, spectral_sum(T_ref, e; sign=-1))
     end
 
     for (name, solve!) in active_solvers
@@ -183,7 +189,7 @@ function bench_solvers(H0_h, F; qs=nothing)
             E_h = Array(E)
             T_h = Array(T)
             err = maximum(maximum(abs, E_h[:, b] - e) / maximum(abs, e) for (b, e) in zip(sample, E_ref))
-            (punit, resid, serr, i) = eigenvector_residuals(T_h, E_h, H0_h, sample, S_ref)
+            (punit, resid, serr, snegerr, i) = eigenvector_residuals(T_h, E_h, H0_h, sample, S_ref, Sneg_ref)
             if !isnothing(qs) && name in (:vendor, :hegvd, :hegvj)
                 pos = sort(filter(>(0), E_ref[i]))
                 gap = minimum(diff(pos)) / maximum(pos)
@@ -193,7 +199,7 @@ function bench_solvers(H0_h, F; qs=nothing)
                 worst = ""
             end
             ws = name in (:vendor, :hegvd, :hegvj) ? @sprintf("%8.2f", rocblas_workspace() / nb / 1024) : "       -"
-            @sprintf("%10.2f %10.3f %9.1e %9.1e %9.1e %9.1e %8d %s", 1e3t, 1e6t / nb, err, punit, resid, serr, nfail, ws) * worst
+            @sprintf("%10.2f %10.3f %9.1e %9.1e %9.1e %9.1e %9.1e %8d %s", 1e3t, 1e6t / nb, err, punit, resid, serr, snegerr, nfail, ws) * worst
         catch e
             "failed: " * first(sprint(showerror, e), 120)
         end
@@ -259,8 +265,11 @@ function bench_intensities(mode)
     t_cpu = @elapsed res = intensities(swt, qs; kwargs...)
     n = 2Sunny.nbands(swt)
     @printf("%-7s n = %2d, %d wavevectors, CPU (%d threads) %.2f s\n", mode, n, nqs, Threads.nthreads(), t_cpu)
-    eigensolvers = on_amd ? (:vendor, :jacobi, :host) : (:jacobi, :host)
-    for precision in precisions, eigensolver in eigensolvers
+    # :vendor with hegvd, through a cutoff of 0 for hegvj
+    labels = on_amd ? (:vendor, :vendor_hegvd, :jacobi, :host) : (:jacobi, :host)
+    for precision in precisions, label in labels
+        eigensolver = label == :vendor_hegvd ? :vendor : label
+        on_amd && (AMDExt.HEGVJ_MAX_N[] = label == :vendor_hegvd ? 0 : 40)
         result = try
             swt_d = to_device(swt; backend, eigensolver, precision)
             t = best_time(() -> intensities(swt_d, qs; kwargs...); reps=3)
@@ -274,7 +283,7 @@ function bench_intensities(mode)
         catch e
             "failed: " * first(sprint(showerror, e), 120)
         end
-        @printf("  %-8s %-7s %s\n", precision, eigensolver, result)
+        @printf("  %-8s %-12s %s\n", precision, label, result)
     end
 end
 
@@ -284,7 +293,7 @@ on_amd ? println("Device: ", AMDGPU.device()) : println("No functional AMD GPU: 
 println()
 
 println("1. Eigensolvers alone. Times exclude the copy of H; ws is rocBLAS workspace per matrix.")
-const header = "   n F            nb  solver    ms total  µs/matrix   rel.err   T'ĨT-Ĩ    HT-ĨTE  Σtt†E err  #status  ws KiB"
+const header = "   n F            nb  solver    ms total  µs/matrix   rel.err   T'ĨT-Ĩ    HT-ĨTE  Σ⁺tt†E err Σ⁻tt†E err #status  ws KiB"
 println(header)
 for n in ns, F in precisions, nb in nbs
     nb_max = free_memory() ÷ 2 ÷ (4n^2 * sizeof(Complex{F}))
