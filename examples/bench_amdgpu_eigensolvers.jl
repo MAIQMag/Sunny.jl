@@ -16,7 +16,10 @@
 #    picks for degenerate modes.
 # 1b. As 1, on the Hamiltonians of spin wave theory for the fcc antiferromagnet
 #    of 2, at its wavevectors, which have degenerate modes, unlike random
-#    Hamiltonians. The checks cover every Hamiltonian, not a sample, and the
+#    Hamiltonians. As in `intensities`, the Hamiltonians are built on device, in
+#    the precision of the run, and the solvers and the host reference take them
+#    as they are. Their largest difference from those built on the host in
+#    Float64 is reported. The checks cover every Hamiltonian, not a sample, and the
 #    vendor solvers report the wavevector of the largest error of the spectral
 #    sum, with the smallest gap between its positive energies.
 # 2. `intensities` end to end, for an fcc antiferromagnet in :dipole (n = 8)
@@ -215,7 +218,8 @@ function fcc_afm(mode)
     return sys
 end
 
-# Hamiltonians of spin wave theory at the wavevectors `qs`
+# Hamiltonians of spin wave theory at the wavevectors `qs`, built on the host in
+# Float64
 function swt_hamiltonians(swt, qs)
     n = 2Sunny.nbands(swt)
     H = Array{ComplexF64}(undef, n, n, length(qs))
@@ -225,8 +229,25 @@ function swt_hamiltonians(swt, qs)
     return H
 end
 
+# As `swt_hamiltonians`, built on device in precision F by the kernel of
+# `intensities`, and returned to the host
+function swt_hamiltonians_device(swt, qs, F)
+    swt_d = to_device(swt; backend, precision=F)
+    (; data) = swt_d
+    n = 2Sunny.nbands(swt)
+    H = KA.allocate(backend, Complex{F}, (n, n, length(qs)))
+    qs_supercell = KAExt.to_backend(backend, F, [Sunny.to_supercell_rlu(swt.sys, q) for q in qs])
+    KAExt.build_hamiltonian!(backend)(H, data.rowptr, data.cols, data.offset_index, data.vals, data.offsets,
+                                      qs_supercell, F(swt.regularization); ndrange=(n, length(qs)))
+    KA.synchronize(backend)
+    return Array(H)
+end
+
 # The wavevectors of section 2
-intensity_qs() = [rand(Xoshiro(1), 3) for _ in 1:nqs]
+function intensity_qs()
+    rng = Xoshiro(1)
+    return [rand(rng, 3) for _ in 1:nqs]
+end
 
 function bench_intensities(mode)
     sys = fcc_afm(mode)
@@ -245,7 +266,11 @@ function bench_intensities(mode)
             t = best_time(() -> intensities(swt_d, qs; kwargs...); reps=3)
             res_d = intensities(swt_d, qs; kwargs...)
             err = norm(res_d.data - res.data) / norm(res.data)
-            @sprintf("%9.3f s  %6.1fx vs CPU  rel. err %.1e", t, t_cpu / t, err)
+            # The wavevector of the largest error, and its share of the error
+            errs = [norm(res_d.data[:, iq] - res.data[:, iq]) for iq in axes(res.data, 2)]
+            (e, iq) = findmax(errs)
+            @sprintf("%9.3f s  %6.1fx vs CPU  rel. err %.1e,  worst q = [%s] with %.0f%% of the error",
+                     t, t_cpu / t, err, join((@sprintf("%.4f", x) for x in qs[iq]), ", "), 100 * e^2 / sum(abs2, errs))
         catch e
             "failed: " * first(sprint(showerror, e), 120)
         end
@@ -279,7 +304,13 @@ println(header)
 for mode in (:dipole, :SUN), F in precisions
     sys = fcc_afm(mode)
     swt = SpinWaveTheory(sys; measure=ssf_perp(sys))
-    bench_solvers(swt_hamiltonians(swt, qs_1b), F; qs=qs_1b)
+    H_d = swt_hamiltonians_device(swt, qs_1b, F)
+    H_h = swt_hamiltonians(swt, qs_1b)
+    dH = maximum(b -> norm(H_d[:, :, b] - H_h[:, :, b]) / norm(H_h[:, :, b]), axes(H_h, 3))
+    herm = maximum(b -> norm(H_d[:, :, b] - H_d[:, :, b]') / norm(H_d[:, :, b]), axes(H_d, 3))
+    @printf("%4d %-8s  device H vs host H: %.1e,  non-Hermitian part of device H: %.1e\n",
+            size(H_d, 1), F, dH, herm)
+    bench_solvers(ComplexF64.(H_d), F; qs=qs_1b)
 end
 println()
 
