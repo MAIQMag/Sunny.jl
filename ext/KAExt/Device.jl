@@ -96,8 +96,8 @@ end
 # cuSOLVER for all n, e.g. 2.9 s vs 2.2 s for 200k matrices with n = 8, and 8.9
 # s vs 1.6 s for 100k matrices with n = 16. On an AMD MI100, it outpaced LAPACK
 # on the host (MKL, 16 threads) by 3.3× for n = 8, and matched it for n = 16
-# and 40. It lagged rocSOLVER for all n, e.g. 1.7 vs 0.37 µs per matrix for
-# n = 8, and 337 vs 44 µs for n = 40, with 100k matrices in Float64.
+# and 40. It lagged rocSOLVER for all n, e.g. 1.7 vs 1.5 µs per matrix for
+# n = 8, and 337 vs 56 µs for n = 40, with 100k matrices in Float64.
 function resolve_eigensolver(backend, eigensolver, n, F)
     if isnothing(eigensolver)
         backend isa KA.CPU && return :host

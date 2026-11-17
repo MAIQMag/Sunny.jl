@@ -4,9 +4,10 @@
 #
 # 1. Solvers alone, on nb random positive definite n×n Hamiltonians:
 #      :vendor  `Sunny.vendor_bogoliubov!`, i.e. `eigensolver=:vendor`, which
-#               calls hegvj for n ≤ 40 and hegvd beyond
-#      :hegvd   rocSOLVER's batched hegvd
-#      :hegvj   rocSOLVER's batched Jacobi-based hegvj
+#               calls rocSOLVER's batched hegvd
+#      :hegvd   hegvd, called directly
+#      :hegvj   rocSOLVER's batched Jacobi-based hegvj, which KAAMDGPUExt does
+#               not use: it was faster, but its intensities were less accurate
 #      :jacobi  the portable Jacobi kernel of KAExt
 #      :host    LAPACK on the host, threaded, with copies to and from the device
 #    Each run checks the energies against `Sunny.bogoliubov!` on the host, and
@@ -23,8 +24,7 @@
 #    vendor solvers report the wavevector of the largest error of the spectral
 #    sum, with the smallest gap between its positive energies.
 # 2. `intensities` end to end, for an fcc antiferromagnet in :dipole (n = 8)
-#    and :SUN (n = 40) modes, per eigensolver of `to_device`. On AMD, :vendor
-#    runs twice, with hegvj for n ≤ 40 (the default) and with hegvd for all n.
+#    and :SUN (n = 40) modes, per eigensolver of `to_device`.
 #
 # Setup, from the Sunny.jl root:
 #   julia --project=bench -e 'using Pkg; Pkg.develop(path="."); Pkg.add(["AMDGPU", "KernelAbstractions", "MKL"])'
@@ -86,8 +86,23 @@ end
 
 const AMDExt = Base.get_extension(Sunny, :KAAMDGPUExt)
 
+# rocSOLVER's batched Jacobi-based hegvj, as `AMDExt.hegvd!` calls hegvd
+hegvj_strided_batched(::Type{Float64}) = rocSOLVER.rocsolver_zhegvj_strided_batched
+hegvj_strided_batched(::Type{Float32}) = rocSOLVER.rocsolver_chegvj_strided_batched
+function hegvj!(T::ROCArray{Complex{F}, 3}, H, λ, status, nb) where F
+    n = size(H, 1)
+    residual = ROCArray{F}(undef, nb)
+    n_sweeps = ROCArray{Int32}(undef, nb)
+    # abstol = 0 selects rocSOLVER's default tolerance, with at most 100 sweeps
+    hegvj_strided_batched(F)(rocBLAS.handle(), rocSOLVER.rocblas_eform_ax, rocSOLVER.rocblas_evect_original,
+                             rocBLAS.rocblas_fill_lower, n, T, n, n^2, H, n, n^2, zero(F), residual,
+                             Int32(100), n_sweeps, λ, n, status, nb)
+    AMDGPU.unsafe_free!(residual)
+    AMDGPU.unsafe_free!(n_sweeps)
+end
+
 # As `Sunny.vendor_bogoliubov!` of KAAMDGPUExt, with the rocSOLVER call
-# `solve!(T, H, λ, status, nb)` chosen, e.g. `AMDExt.hegvd!` or `AMDExt.hegvj!`
+# `solve!(T, H, λ, status, nb)` chosen, e.g. `AMDExt.hegvd!` or `hegvj!`
 function bogoliubov_with!(solve!, T::ROCArray{Complex{F}, 3}, E, H, nb, status) where F
     n = size(H, 1)
     L = n ÷ 2
@@ -113,7 +128,7 @@ end
 const solvers = [
     :vendor => (T, E, H, W, status, nb) -> Sunny.vendor_bogoliubov!(T, E, H, nb, status),
     :hegvd => (T, E, H, W, status, nb) -> bogoliubov_with!(AMDExt.hegvd!, T, E, H, nb, status),
-    :hegvj => (T, E, H, W, status, nb) -> bogoliubov_with!(AMDExt.hegvj!, T, E, H, nb, status),
+    :hegvj => (T, E, H, W, status, nb) -> bogoliubov_with!(hegvj!, T, E, H, nb, status),
     :jacobi => (T, E, H, W, status, nb) -> KAExt.bogoliubov_jacobi!(backend)(T, E, H, W, status; ndrange=nb),
     # swt and qs only enter the message of an InstabilityError
     :host => (T, E, H, W, status, nb) -> KAExt.bogoliubov_host!(T, E, H, nb, nothing, nothing; threaded=true),
@@ -265,11 +280,8 @@ function bench_intensities(mode)
     t_cpu = @elapsed res = intensities(swt, qs; kwargs...)
     n = 2Sunny.nbands(swt)
     @printf("%-7s n = %2d, %d wavevectors, CPU (%d threads) %.2f s\n", mode, n, nqs, Threads.nthreads(), t_cpu)
-    # :vendor with hegvd, through a cutoff of 0 for hegvj
-    labels = on_amd ? (:vendor, :vendor_hegvd, :jacobi, :host) : (:jacobi, :host)
-    for precision in precisions, label in labels
-        eigensolver = label == :vendor_hegvd ? :vendor : label
-        on_amd && (AMDExt.HEGVJ_MAX_N[] = label == :vendor_hegvd ? 0 : 40)
+    eigensolvers = on_amd ? (:vendor, :jacobi, :host) : (:jacobi, :host)
+    for precision in precisions, eigensolver in eigensolvers
         result = try
             swt_d = to_device(swt; backend, eigensolver, precision)
             t = best_time(() -> intensities(swt_d, qs; kwargs...); reps=3)
@@ -283,7 +295,7 @@ function bench_intensities(mode)
         catch e
             "failed: " * first(sprint(showerror, e), 120)
         end
-        @printf("  %-8s %-12s %s\n", precision, label, result)
+        @printf("  %-8s %-7s %s\n", precision, eigensolver, result)
     end
 end
 

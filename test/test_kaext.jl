@@ -286,15 +286,14 @@ end
 end
 
 # AMD GPUs support Float64, which is the default precision. The vendor
-# eigensolver is rocSOLVER's batched hegvj for n ≤ 40 and hegvd beyond, in
-# either precision.
+# eigensolver is rocSOLVER's batched hegvd, in either precision.
 @testitem "KAExt intensities on AMDGPU" tags=[:gpu, :amdgpu] setup=[KAModels] begin
     using .KAModels: fcc_afm, entangled_dimers, test_device_intensities, test_device_instability, test_vendor_bogoliubov
     import AMDGPU
     backend = AMDGPU.ROCBackend()
 
     @test Sunny.device_precision(backend) == Float64
-    # n = 8 with hegvj, and n = 48 with hegvd
+    # n = 8 and n = 48
     for precision in (Float64, Float32), L in (4, 24)
         test_vendor_bogoliubov(backend, precision; L)
     end
