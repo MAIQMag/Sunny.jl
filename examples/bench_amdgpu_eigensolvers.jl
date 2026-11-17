@@ -15,7 +15,10 @@
 #    energy, which, as intensities, is independent of the basis that a solver
 #    picks for degenerate modes.
 # 1b. As 1, on the Hamiltonians of spin wave theory for the fcc antiferromagnet
-#    of 2, which have degenerate modes, unlike random Hamiltonians.
+#    of 2, at its wavevectors, which have degenerate modes, unlike random
+#    Hamiltonians. The checks cover every Hamiltonian, not a sample, and the
+#    vendor solvers report the wavevector of the largest error of the spectral
+#    sum, with the smallest gap between its positive energies.
 # 2. `intensities` end to end, for an fcc antiferromagnet in :dipole (n = 8)
 #    and :SUN (n = 40) modes, per eigensolver of `to_device`.
 #
@@ -136,15 +139,18 @@ function eigenvector_residuals(T, E, H, sample, S_ref)
         (Tb, Hb) = (ComplexF64.(T[:, :, b]), H[:, :, b])
         norm(Hb * Tb - Ĩ * Tb * Diagonal(E[:, b])) / (norm(Hb) * norm(Tb))
     end
-    serr = maximum(zip(sample, S_ref)) do (b, S)
+    serrs = map(zip(sample, S_ref)) do (b, S)
         norm(spectral_sum(ComplexF64.(T[:, :, b]), Float64.(E[:, b])) - S) / norm(S)
     end
-    return (punit, resid, serr)
+    (serr, i) = findmax(serrs)
+    return (punit, resid, serr, i)
 end
 
 free_memory() = on_amd ? AMDGPU.free() : Int(Sys.free_memory())
 
-function bench_solvers(H0_h, F)
+# The checks cover a sample of 16 Hamiltonians, or all of them if `qs`, their
+# wavevectors, are given
+function bench_solvers(H0_h, F; qs=nothing)
     (n, _, nb) = size(H0_h)
     H0 = to_dev(Complex{F}.(H0_h))
     (H, T, W) = (similar(H0), similar(H0), similar(H0))
@@ -154,7 +160,7 @@ function bench_solvers(H0_h, F)
 
     # Reference energies and spectral sums on the host, in Float64, for a
     # sample of the batch
-    sample = unique(round.(Int, range(1, nb, 16)))
+    sample = isnothing(qs) ? unique(round.(Int, range(1, nb, 16))) : collect(1:nb)
     (E_ref, S_ref) = (Vector{Float64}[], Matrix{ComplexF64}[])
     for b in sample
         T_ref = zeros(ComplexF64, n, n)
@@ -174,9 +180,17 @@ function bench_solvers(H0_h, F)
             E_h = Array(E)
             T_h = Array(T)
             err = maximum(maximum(abs, E_h[:, b] - e) / maximum(abs, e) for (b, e) in zip(sample, E_ref))
-            (punit, resid, serr) = eigenvector_residuals(T_h, E_h, H0_h, sample, S_ref)
+            (punit, resid, serr, i) = eigenvector_residuals(T_h, E_h, H0_h, sample, S_ref)
+            if !isnothing(qs) && name in (:vendor, :hegvd, :hegvj)
+                pos = sort(filter(>(0), E_ref[i]))
+                gap = minimum(diff(pos)) / maximum(pos)
+                worst = @sprintf("\n%33s worst q = [%s], smallest relative gap of positive energies %.1e", "",
+                                 join((@sprintf("%.4f", x) for x in qs[sample[i]]), ", "), gap)
+            else
+                worst = ""
+            end
             ws = name in (:vendor, :hegvd, :hegvj) ? @sprintf("%8.2f", rocblas_workspace() / nb / 1024) : "       -"
-            @sprintf("%10.2f %10.3f %9.1e %9.1e %9.1e %9.1e %8d %s", 1e3t, 1e6t / nb, err, punit, resid, serr, nfail, ws)
+            @sprintf("%10.2f %10.3f %9.1e %9.1e %9.1e %9.1e %8d %s", 1e3t, 1e6t / nb, err, punit, resid, serr, nfail, ws) * worst
         catch e
             "failed: " * first(sprint(showerror, e), 120)
         end
@@ -201,22 +215,23 @@ function fcc_afm(mode)
     return sys
 end
 
-# Hamiltonians of spin wave theory at `nq` random wavevectors
-function swt_hamiltonians(swt, nq)
+# Hamiltonians of spin wave theory at the wavevectors `qs`
+function swt_hamiltonians(swt, qs)
     n = 2Sunny.nbands(swt)
-    H = Array{ComplexF64}(undef, n, n, nq)
-    rng = Xoshiro(2)
-    for b in 1:nq
-        q_supercell = Sunny.to_supercell_rlu(swt.sys, rand(rng, 3))
-        Sunny.hamiltonian_matrix!(view(H, :, :, b), swt, q_supercell)
+    H = Array{ComplexF64}(undef, n, n, length(qs))
+    for (b, q) in enumerate(qs)
+        Sunny.hamiltonian_matrix!(view(H, :, :, b), swt, Sunny.to_supercell_rlu(swt.sys, q))
     end
     return H
 end
 
+# The wavevectors of section 2
+intensity_qs() = [rand(Xoshiro(1), 3) for _ in 1:nqs]
+
 function bench_intensities(mode)
     sys = fcc_afm(mode)
     swt = SpinWaveTheory(sys; measure=ssf_perp(sys))
-    qs = [rand(Xoshiro(1), 3) for _ in 1:nqs]
+    qs = intensity_qs()
     kwargs = (; energies=range(0, 12, 200), kernel=gaussian(fwhm=0.5))
     # Warm up on a few wavevectors, so that the time excludes compilation
     intensities(swt, qs[1:10]; kwargs...)
@@ -256,12 +271,15 @@ for n in ns, F in precisions, nb in nbs
 end
 println()
 
-println("1b. As 1, on the Hamiltonians of spin wave theory for the fcc antiferromagnet")
+# At most 20k wavevectors, for the time of the checks on the host
+const qs_1b = intensity_qs()[1:min(nqs, 20_000)]
+println("1b. As 1, on the Hamiltonians of spin wave theory for the fcc antiferromagnet,")
+println("    at the first $(length(qs_1b)) wavevectors of 2. The checks cover every Hamiltonian.")
 println(header)
 for mode in (:dipole, :SUN), F in precisions
     sys = fcc_afm(mode)
     swt = SpinWaveTheory(sys; measure=ssf_perp(sys))
-    bench_solvers(swt_hamiltonians(swt, nbs[end] ÷ 10), F)
+    bench_solvers(swt_hamiltonians(swt, qs_1b), F; qs=qs_1b)
 end
 println()
 
