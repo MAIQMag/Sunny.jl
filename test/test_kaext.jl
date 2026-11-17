@@ -114,12 +114,18 @@
     # Intensities on `backend` reproduce those on the host, to a tolerance for
     # the `precision` on device, relative to the norm of all intensities. A
     # batch size that does not divide the number of wavevectors exercises the
-    # final batch.
+    # final batch. The host reference uses the regularization of the device,
+    # which in Float32 is raised above that of `swt` and shifts energies by
+    # more than rounding, so that the tolerance measures rounding alone.
     function test_device_intensities(swt, backend; eigensolver=nothing, precision=Sunny.device_precision(backend),
                                      rtol=(precision == Float64 ? 1e-12 : 1e-4), energies=range(-2, 10, 25), broadenings=broadenings)
         Random.seed!(0)
         qs = [rand(3) for _ in 1:37]
         swt_d = to_device(swt; backend, eigensolver, precision)
+        regularization = Float64(swt_d.data.regularization)
+        if regularization != swt.regularization
+            swt = SpinWaveTheory(swt.sys; swt.measure, regularization)
+        end
         for b in broadenings
             res = intensities(swt, qs; energies, b...)
             res_d = intensities(swt_d, qs; energies, batch_size=8, b...)
