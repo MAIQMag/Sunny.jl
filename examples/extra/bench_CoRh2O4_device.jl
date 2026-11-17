@@ -170,20 +170,37 @@ else
     KernelAbstractions.CPU()
 end
 swt_d = to_device(swt; backend)
+const KAExt = Base.get_extension(Sunny, :KAExt)
 
 # The device model `swt_d` replaces `swt` in calls to [`intensities`](@ref).
 # Inside [`powder_average`](@ref), the option `batch_size` passes the points of
 # several shells to each call, which gives the GPU more work at once.
 
-res_d = intensities(swt_d, path; energies, kernel)
-res_powder_d = powder_average(cryst, radii, 2000; batch_size=50) do qs
-    intensities(swt_d, qs; energies, kernel)
+# The results agree with those on the host to within the precision of the
+# device, which is `Float32` for Metal and `Float64` otherwise.
+#
+# `powder_average` copies the intensities of every point on every shell back to
+# the host, and averages them there. With `output=:device`, the average over
+# each shell can instead run on the device, so that only one spectrum per shell
+# is copied. This reproduces `powder_average`, with the same random rotation
+# per shell.
+
+function powder_average_device(swt_d, cryst, radii, n; seed=0, batch_size=50, energies, kernel)
+    rng = Sunny.Random.Xoshiro(seed)
+    sphpts = Sunny.sphere_points(n)
+    to_rlu = inv(cryst.recipvecs)
+    data = zeros(length(energies), length(radii))
+    for is in Iterators.partition(eachindex(radii), batch_size)
+        qs = reduce(vcat, [Ref(to_rlu * Sunny.Mat3(Sunny.random_orthogonal(rng, 3)) * radii[i]) .* sphpts for i in is])
+        res = intensities(swt_d, qs; energies, kernel, output=:device)
+        avg = sum(reshape(res.data, length(energies), n, length(is)); dims=2) ./ n
+        data[:, is] .= Array(dropdims(avg; dims=2))
+    end
+    return Sunny.PowderIntensities(cryst, collect(radii), collect(Float64, energies), data)
 end
 
-# The results agree with those on the host to within the precision of the
-# device, which is `Float32` for Metal and `Float64` otherwise. Compare the
-# times of both calculations, each the best of three runs after a warm-up, to
-# the serial host calculations above.
+# Compare the times of the calculations, each the best of three runs after a
+# warm-up, to the threaded host calculations above.
 
 besttime(f) = (f(); minimum(@elapsed(f()) for _ in 1:3))
 function powder_host()
@@ -196,31 +213,20 @@ function powder_device()
         intensities(swt_d, qs; energies, kernel)
     end
 end
+powder_device_avg() = powder_average_device(swt_d, cryst, radii, 2000; energies, kernel)
 relerr(a, b) = sqrt(sum(abs2, a - b) / sum(abs2, b))
 
-res_path = intensities(swt, path; energies, kernel)
-res_powder = powder_host()
-for (name, f_host, f_device, res_h, res_dev) in (
-        ("Path", () -> intensities(swt, path; energies, kernel, kT=0, threaded=true), () -> intensities(swt_d, path; energies, kernel), res_path, res_d),
-        ("Powder average", powder_host, powder_device, res_powder, res_powder_d))
+println(Sunny.nsites(swt.sys), " sites (n = ", 2Sunny.nbands(swt), ") on ", backend, " in ", KAExt.precision_of(swt_d),
+        ", eigensolver ", repr(swt_d.eigensolver), ", ", Threads.nthreads(), " host threads")
+for (name, f_host, f_device) in (
+        ("Path", () -> intensities(swt, path; energies, kernel, kT=0, threaded=true), () -> intensities(swt_d, path; energies, kernel)),
+        ("Powder average", powder_host, powder_device),
+        ("  on device", powder_host, powder_device_avg))
+    res_h = f_host()
+    res_dev = f_device()
     t_host = besttime(f_host)
     t_device = besttime(f_device)
     println(rpad(name, 16), "host ", round(t_host; sigdigits=3), " s, device ", round(t_device; sigdigits=3),
             " s, speedup ", round(t_host / t_device; digits=1), "×, relative difference ",
             round(relerr(res_dev.data, res_h.data); sigdigits=2))
 end
-
-
-# ### What's next?
-#
-# * For more spin wave calculations of this type, browse the [SpinW tutorials
-#   ported to Sunny](@ref "SW01 - FM Heisenberg chain").
-# * Spin wave theory neglects thermal fluctuations of the magnetic order. The
-#   [next CoRh₂O₄ tutorial](@ref "2. Landau-Lifshitz dynamics of CoRh₂O₄ at
-#   finite *T*") demonstrates how to sample spins in thermal equilibrium and
-#   measure correlations from the classical spin dynamics.
-# * Sunny also offers features that go beyond the dipole approximation of a
-#   quantum spin via the theory of SU(_N_) coherent states. This can be
-#   especially useful for systems with strong single-ion anisotropy, as
-#   demonstrated in the [FeI₂ tutorial](@ref "3. Multi-flavor spin wave
-#   simulations of FeI₂").
