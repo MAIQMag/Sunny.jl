@@ -91,7 +91,7 @@ jobs:
         if: steps.check.outputs.triggered == 'true'
         uses: julia-actions/cache@v3
         with:
-          depot: $HOME/.julia-zenith
+          depot: ${{ env.JULIA_DEPOT_PATH }}
 
       - name: Test
         if: steps.check.outputs.triggered == 'true'
@@ -110,8 +110,9 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
           fail_ci_if_error: true
-          base_sha: ${{fromJson(steps.request.outputs.data).head.sha}}
-          override_pr: ${{ github.event.pull_request.number }}
+          override_commit: ${{fromJson(steps.request.outputs.data).head.sha}}
+          override_branch: ${{steps.pr_data.outputs.branch}}
+          override_pr: ${{github.event.issue.number}}
           flags: cuda
 
       - name: Report PR status
