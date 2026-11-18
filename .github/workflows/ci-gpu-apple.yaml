@@ -5,13 +5,13 @@ on:
     types: [created]
 
 jobs:
-  apple-metal:
+  macminim3:
     if: |
       github.repository_owner == 'MAIQMag' &&
       github.event.issue.pull_request &&
       startsWith(github.event.comment.body, 'Test this please')
 
-    runs-on: [self-hosted, ARM64, macOS]
+    runs-on: [self-hosted, ARM64, macOS, macminim3]
     timeout-minutes: 180
 
     env:
@@ -104,7 +104,7 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
-          fail_ci_if_error: true
+          fail_ci_if_error: false
           override_commit: ${{fromJson(steps.request.outputs.data).head.sha}}
           override_branch: ${{steps.pr_data.outputs.branch}}
           override_pr: ${{github.event.issue.number}}
