@@ -269,8 +269,9 @@ group_count(NP) = clamp(16384 ÷ group_bytes(NP), 1, 8)
 end
 
 # As `eigen_tile!`, for the matrix b of a SIMD group with slice g of the
-# workspace `ws = (d, e, τ, v, z)`. Called by every lane of the SIMD group.
-@inline function eigen_group!(λ, Y, A, b, ws, g)
+# workspace `ws = (d, e, τ, v, z)`, and Z[:, :, b] for the real eigenvectors of
+# the tridiagonal. Called by every lane of the SIMD group.
+@inline function eigen_group!(λ, Y, A, Z, b, ws, g)
     (td, te, tτ, tv, tz) = ws
     n = size(A, 1)
     lane = Int(thread_index_in_simdgroup())
@@ -336,13 +337,19 @@ end
     for i in rows
         td[i, g] = real(A[i, i, b])
         for j in 1:n
-            Y[i, j, b] = i == j
+            Z[i, j, b] = i == j
         end
     end
     lane == 1 && (te[n, g] = 0f0)
     group_sync()
 
-    # Implicit QL, as `eigen_tile!`, on (d, e) in threadgroup memory
+    # Implicit QL, as `eigen_tile!`, on (d, e) in threadgroup memory. QL's
+    # rotations are real, so they accumulate in the real Z. Each sweep stores
+    # its rotations (c, s) in v and its new (d, e) in z, so the recurrence needs
+    # no barrier, and then each lane applies the chain of rotations to its rows
+    # of Z, carrying one entry between rotations. This was 1.1× faster than
+    # rotating the complex Y step by step for n ≤ 64, and 1.2-1.3× for n = 128
+    # and 256.
     f = 0f0
     tst1 = 0f0
     converged = true
@@ -395,22 +402,32 @@ end
                     c = p / r
                     p = c * d_i - s * g1
                     d_next = h1 + s * (c * g1 + s * d_i)
-                    group_sync()
                     if lane == 1
-                        te[ii+1, g] = e_next
-                        td[ii+1, g] = d_next
-                    end
-                    for i in rows
-                        (y0, y1) = (Y[i, ii, b], Y[i, ii+1, b])
-                        Y[i, ii+1, b] = s * y0 + c * y1
-                        Y[i, ii, b] = c * y0 - s * y1
+                        tz[ii+1, g] = ComplexF32(d_next, e_next)
+                        tv[ii, g] = ComplexF32(c, s)
                     end
                 end
                 p = -s * s2 * c3 * el1 * e_l / dl1
                 group_sync()
+                for i in rows
+                    if l + 1 <= i <= m
+                        td[i, g] = real(tz[i, g])
+                        te[i, g] = imag(tz[i, g])
+                    end
+                end
                 if lane == 1
                     te[l, g] = s * p
                     td[l, g] = c * p
+                end
+                for i in rows
+                    carry = Z[i, m, b]
+                    for ii in m-1:-1:l
+                        cs = tv[ii, g]
+                        z0 = Z[i, ii, b]
+                        Z[i, ii+1, b] = imag(cs) * z0 + real(cs) * carry
+                        carry = real(cs) * z0 - imag(cs) * carry
+                    end
+                    Z[i, l, b] = carry
                 end
                 group_sync()
                 abs(s * p) > eps(Float32) * tst1 || break
@@ -445,13 +462,16 @@ end
                     td[kmin, g] = d_i
                 end
                 for i in rows
-                    (Y[i, ii, b], Y[i, kmin, b]) = (Y[i, kmin, b], Y[i, ii, b])
+                    (Z[i, ii, b], Z[i, kmin, b]) = (Z[i, kmin, b], Z[i, ii, b])
                 end
                 group_sync()
             end
         end
 
-        # Y ← Hₖ Y for k = n-1, …, 1, by columns
+        # Y ← Hₖ Z for k = n-1, …, 1, by columns
+        for i in rows, j in 1:n
+            Y[i, j, b] = Z[i, j, b]
+        end
         group_sync()
         for j in rows
             for k in n-1:-1:1
@@ -473,12 +493,12 @@ end
     return converged
 end
 
-function hermitian_eigen_group_kernel!(λ, Y, A, status, ::Val{NP}, ::Val{G}) where {NP, G}
+function hermitian_eigen_group_kernel!(λ, Y, A, Z, status, ::Val{NP}, ::Val{G}) where {NP, G}
     b = (Int(Metal.thread_position_in_grid_1d()) - 1) ÷ SIMD_WIDTH + 1
     ws = group_workspace(Val(NP), Val(G))
     b > size(A, 3) && return
     g = Int(Metal.simdgroup_index_in_threadgroup())
-    converged = eigen_group!(λ, Y, A, b, ws, g)
+    converged = eigen_group!(λ, Y, A, Z, b, ws, g)
     thread_index_in_simdgroup() == 1 && (status[b] = converged ? STATUS_OK : STATUS_NOCONVERGE)
     return
 end
@@ -489,6 +509,8 @@ function hermitian_eigen_group!(λ::Metal.MtlMatrix{Float32}, Y::Metal.MtlArray{
     nb = size(A, 3)
     NP = group_padded(n)
     G = group_count(NP)
-    Metal.@metal threads=SIMD_WIDTH*G groups=cld(nb, G) hermitian_eigen_group_kernel!(λ, Y, A, status, Val(NP), Val(G))
+    Z = similar(λ, n, n, nb)
+    Metal.@metal threads=SIMD_WIDTH*G groups=cld(nb, G) hermitian_eigen_group_kernel!(λ, Y, A, Z, status, Val(NP), Val(G))
+    Metal.unsafe_free!(Z)
     return
 end

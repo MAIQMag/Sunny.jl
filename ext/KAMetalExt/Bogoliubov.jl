@@ -133,11 +133,11 @@ function bogoliubov_tiled_kernel!(T, E, H, A, status, nb, ::Val{W}) where W
 end
 
 # As `bogoliubov_tiled_kernel!`, for n > 32 with one SIMD group per
-# Hamiltonian, and the workspace of `eigen_group!`. Lane ℓ owns rows or columns
-# ℓ, ℓ+32, …. Its control flow is uniform over the SIMD group, so barriers may
-# appear anywhere, and the pivots of Cholesky are computed redundantly by every
-# lane from rows in device memory.
-function bogoliubov_group_kernel!(T, E, H, A, status, nb, ::Val{NP}, ::Val{G}) where {NP, G}
+# Hamiltonian, and the workspaces of `eigen_group!`, including the real Z. Lane
+# ℓ owns rows or columns ℓ, ℓ+32, …. Its control flow is uniform over the SIMD
+# group, so barriers may appear anywhere, and the pivots of Cholesky are
+# computed redundantly by every lane from rows in device memory.
+function bogoliubov_group_kernel!(T, E, H, A, Z, status, nb, ::Val{NP}, ::Val{G}) where {NP, G}
     n = size(H, 1)
     L = n ÷ 2
     b = (Int(Metal.thread_position_in_grid_1d()) - 1) ÷ SIMD_WIDTH + 1
@@ -218,7 +218,7 @@ function bogoliubov_group_kernel!(T, E, H, A, status, nb, ::Val{NP}, ::Val{G}) w
         end
         group_sync()
 
-        eigen_group!(E, T, A, b, ws, g) || (st = STATUS_NOCONVERGE)
+        eigen_group!(E, T, A, Z, b, ws, g) || (st = STATUS_NOCONVERGE)
     end
 
     # t = K⁻† y in T, by columns
@@ -280,7 +280,9 @@ function Sunny.vendor_bogoliubov!(T::Metal.MtlArray{ComplexF32, 3}, E::Metal.Mtl
     else
         NP = group_padded(n)
         G = group_count(NP)
-        Metal.@metal threads=SIMD_WIDTH*G groups=cld(nb, G) bogoliubov_group_kernel!(T, E, H, A, status, nb, Val(NP), Val(G))
+        Z = similar(E, n, n, nb)
+        Metal.@metal threads=SIMD_WIDTH*G groups=cld(nb, G) bogoliubov_group_kernel!(T, E, H, A, Z, status, nb, Val(NP), Val(G))
+        Metal.unsafe_free!(Z)
     end
     # The λ in E are copied before E is overwritten by the energies
     Sunny.finish_vendor_bogoliubov!(T, E, E, nb, status)
