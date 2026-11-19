@@ -70,7 +70,11 @@
         @test status[2] > 0
         Hs_bad[4] = fill(NaN, n, n)
         (_, _, status) = solve(Hs_bad)
-        @test status == [0, 0, 0, -1, 0]
+        # cuSOLVER and rocSOLVER skip the batch if any H is non-finite, leaving
+        # 0 for the H that is not positive definite, whereas the Metal kernel
+        # solves each H independently, as :host and :jacobi do
+        @test status[[1, 3, 4, 5]] == [0, 0, -1, 0]
+        @test status[2] == 0 || status[2] > 0
     end
 
     # Néel order on the fcc lattice, with cubic anisotropy
@@ -365,14 +369,22 @@ end
 
 # Metal lacks Float64, so the device works in Float32, and a vendor eigensolver
 @testitem "KAExt intensities on Metal" tags=[:gpu, :metal] setup=[KAModels] begin
-    using .KAModels: fcc_afm, test_device_intensities, test_device_instability
+    using .KAModels: fcc_afm, entangled_dimers, test_device_intensities, test_device_instability, test_vendor_bogoliubov
     import Metal
     backend = Metal.MetalBackend()
 
     @test Sunny.device_precision(backend) == Float32
     @test Sunny.device_free_memory(backend) > 0
-    for eigensolver in (:jacobi, :host)
-        for mode in (:dipole, :SUN)
+
+    # The vendor eigensolver, a port of EigenG-Batched, for matrices of every
+    # tile width up to its limit of n = 32
+    for L in (1, 2, 3, 4, 8, 16)
+        test_vendor_bogoliubov(backend, Float32; L)
+    end
+
+    # The :SUN model, with n = 40, exceeds the vendor eigensolver
+    for eigensolver in (:vendor, :jacobi, :host)
+        for mode in (eigensolver == :vendor ? (:dipole,) : (:dipole, :SUN))
             sys = fcc_afm(mode)
             swt = SpinWaveTheory(sys; measure=ssf_perp(sys; formfactors=[1 => FormFactor("Co2")]))
             swt_d = test_device_intensities(swt, backend; eigensolver)
@@ -382,8 +394,16 @@ end
         end
         test_device_instability(backend; eigensolver)
     end
+    # Entangled units, n = 4, on the vendor eigensolver
+    sys = entangled_dimers()
+    test_device_intensities(SpinWaveTheory(sys; measure=ssf_perp(sys)), backend; eigensolver=:vendor)
+
+    # The vendor eigensolver is the default within its limit, and otherwise
+    # :host, as without one
     swt = SpinWaveTheory(fcc_afm(:dipole); measure=nothing)
-    @test to_device(swt; backend).eigensolver == :jacobi
-    @test_throws "No vendor eigensolver" to_device(swt; backend, eigensolver=:vendor)
+    @test to_device(swt; backend).eigensolver == :vendor
+    swt = SpinWaveTheory(fcc_afm(:SUN); measure=nothing)
+    @test to_device(swt; backend).eigensolver == :host
+    @test_throws "at most 16 bands" to_device(swt; backend, eigensolver=:vendor)
     @test_throws "Float64" to_device(swt; backend, precision=Float64)
 end

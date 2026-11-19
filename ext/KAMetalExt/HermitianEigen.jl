@@ -74,7 +74,18 @@ function hermitian_eigen_tiled_kernel!(λ, Y, A, status, ::Val{W}) where W
     b = (Int(Metal.thread_position_in_grid_1d()) - 1) ÷ W + 1
     b > size(A, 3) && return
     lane = tile_lane(Val(W))
-    row = lane <= n
+    converged = eigen_tile!(λ, Y, A, b, lane <= n, Val(W))
+    lane == 1 && (status[b] = converged ? STATUS_OK : STATUS_NOCONVERGE)
+    return
+end
+
+# The work of one tile on matrix b, called by every lane of the tile, where
+# `row` is whether the lane owns a row, i.e., lane ≤ n. Contains no barrier, so
+# tiles may call it under different control flow. Returns whether QL converged,
+# and stores λ only then.
+@inline function eigen_tile!(λ, Y, A, b, row, ::Val{W}) where W
+    n = size(A, 1)
+    lane = tile_lane(Val(W))
     i = min(lane, n)   # A valid row for addressing; stores are predicated on `row`
     bc(x, root) = tile_bcast(x, root, Val(W))
 
@@ -217,8 +228,7 @@ function hermitian_eigen_tiled_kernel!(λ, Y, A, status, ::Val{W}) where W
         end
         row && (λ[i, b] = dl)
     end
-    lane == 1 && (status[b] = converged ? STATUS_OK : STATUS_NOCONVERGE)
-    return
+    return converged
 end
 
 # Host entry, for the first nb = size(A, 3) matrices

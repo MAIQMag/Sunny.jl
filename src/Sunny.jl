@@ -185,8 +185,14 @@ extension_fns = [
 
 # Batched Bogoliubov transformation by a vendor library, as
 # `vendor_bogoliubov!(T, E, H, nb, status)`. Methods are defined by
-# ext/KACUDAExt and ext/KAAMDGPUExt, and KAExt documents the status codes.
+# ext/KACUDAExt, ext/KAAMDGPUExt and ext/KAMetalExt, and KAExt documents the
+# status codes.
 function vendor_bogoliubov! end
+
+# The largest matrix size n of `vendor_bogoliubov!` for a backend, as
+# `vendor_bogoliubov_max_size(backend)`. Unlimited by default in ext/KAExt, and
+# limited by ext/KAMetalExt.
+function vendor_bogoliubov_max_size end
 
 # The steps shared by methods of `vendor_bogoliubov!`, after a vendor solver of
 # Ĩ t = λ H t, as `finish_vendor_bogoliubov!(T, E, λ, nb, status)`. Defined by

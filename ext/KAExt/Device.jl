@@ -82,12 +82,13 @@ end
 precision_of(::SpinWaveTheoryDevice{F}) where F = F
 
 # Whether an extension provides `Sunny.vendor_bogoliubov!` for `backend` in
-# precision F
-function has_vendor_bogoliubov(backend, F)
+# precision F, for n×n matrices
+Sunny.vendor_bogoliubov_max_size(_) = typemax(Int)
+function has_vendor_bogoliubov(backend, F, n)
     H = KA.allocate(backend, Complex{F}, (2, 2, 1))
     E = KA.allocate(backend, F, (2, 1))
     status = KA.allocate(backend, Int32, 1)
-    return applicable(Sunny.vendor_bogoliubov!, H, E, H, 1, status)
+    return applicable(Sunny.vendor_bogoliubov!, H, E, H, 1, status) && n <= Sunny.vendor_bogoliubov_max_size(backend)
 end
 
 # The Jacobi kernel uses one thread per wavevector, with strided memory access,
@@ -101,11 +102,15 @@ end
 function resolve_eigensolver(backend, eigensolver, n, F)
     if isnothing(eigensolver)
         backend isa KA.CPU && return :host
-        has_vendor_bogoliubov(backend, F) && return :vendor
+        has_vendor_bogoliubov(backend, F, n) && return :vendor
         return n <= 8 ? :jacobi : :host
     end
     eigensolver in (:host, :jacobi, :vendor) || error("Unknown eigensolver $(repr(eigensolver)); use :host, :jacobi or :vendor")
-    if eigensolver == :vendor && !has_vendor_bogoliubov(backend, F)
+    if eigensolver == :vendor && !has_vendor_bogoliubov(backend, F, n)
+        max_n = Sunny.vendor_bogoliubov_max_size(backend)
+        if n > max_n
+            error("Vendor eigensolver for $backend supports at most $(max_n ÷ 2) bands, got $(n ÷ 2); use :host or :jacobi")
+        end
         error("No vendor eigensolver for $backend in $F; load its package (e.g. CUDA or AMDGPU) or use :jacobi")
     end
     return eigensolver
@@ -134,8 +139,8 @@ Goldstone modes, remain stable.
 
 The batched `eigensolver` for the Bogoliubov transformation may be `:host`
 (LAPACK on the host), `:vendor` (cuSOLVER or rocSOLVER, the default when CUDA
-or AMDGPU is loaded), or `:jacobi` (a portable kernel, efficient for small
-matrices).
+or AMDGPU is loaded, or a Householder–QL kernel on Metal for at most 16 bands),
+or `:jacobi` (a portable kernel, efficient for small matrices).
 The default is `:host` for `KernelAbstractions.CPU()`. Otherwise it is
 `:vendor` if available, else `:jacobi` for at most 4 bands and `:host` beyond.
 
