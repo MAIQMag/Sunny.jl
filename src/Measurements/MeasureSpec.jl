@@ -418,7 +418,7 @@ function ssf_perp(sys; apply_g=true, formfactors=nothing)
         # neutrons. In the limit q → 0, use (1 - q⊗q/q²) → 2/3, which
         # corresponds to a spherical average over uncorrelated data:
         # https://github.com/SunnySuite/Sunny.jl/pull/131
-        (iszero(q2) ? (2/3)*tr(ssf) : tr(ssf) - dot(q, ssf, q) / q2)
+        (iszero(q2) ? 2tr(ssf)/3 : tr(ssf) - dot(q, ssf, q) / q2)
     end
 end
 

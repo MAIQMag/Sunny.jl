@@ -29,6 +29,8 @@ function norm2(a)
     end
     return acc
 end
+# In the precision of the elements, e.g. Float32 on GPUs without Float64
+norm2(a::SArray) = sum(norm2, a)
 
 # Calculates norm(a - b)^2 without allocating
 diffnorm2(a::Number, b::Number) = abs2(a - b)

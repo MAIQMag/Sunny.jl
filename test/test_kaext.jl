@@ -392,9 +392,8 @@ end
             sys = fcc_afm(mode)
             swt = SpinWaveTheory(sys; measure=ssf_perp(sys; formfactors=[1 => FormFactor("Co2")]))
             swt_d = test_device_intensities(swt, backend; eigensolver)
-            # The combiner of `ssf_perp` computes in Float64, so its forms are
-            # evaluated on the host instead
-            @test_broken swt_d.measure_mode == :combiner
+            # The combiner of `ssf_perp` computes in the device precision
+            @test swt_d.measure_mode == :combiner
         end
         test_device_instability(backend; eigensolver)
     end
