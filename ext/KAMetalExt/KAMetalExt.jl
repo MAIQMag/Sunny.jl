@@ -7,6 +7,7 @@ using Metal: Metal
 using Sunny: Sunny
 
 include("Tile.jl")
+include("HermitianEigen.jl")
 
 # Metal GPUs lack Float64
 Sunny.device_precision(::Metal.MetalBackend) = Float32
