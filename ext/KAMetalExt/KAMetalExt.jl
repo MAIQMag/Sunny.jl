@@ -6,6 +6,8 @@ module KAMetalExt
 using Metal: Metal
 using Sunny: Sunny
 
+include("Tile.jl")
+
 # Metal GPUs lack Float64
 Sunny.device_precision(::Metal.MetalBackend) = Float32
 
