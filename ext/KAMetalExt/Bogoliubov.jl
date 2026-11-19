@@ -238,10 +238,40 @@ function bogoliubov_group_kernel!(T, E, H, A, status, nb, ::Val{NP}, ::Val{G}) w
     return
 end
 
+# The energies of the finished T, recomputed as Rayleigh quotients of the
+# original H, ε = (t† H t) / (t† Ĩ t) for each column t, with one thread per
+# column. The quotient is stationary at an eigenvector, so the O(δ) error of a
+# t gives an O(δ²) error in ε. In Float32, for the √3×√3 kagome model at the
+# device regularization, the relative error of energies above 5% of the largest
+# fell from 3.0e-3 to 1.9e-4. Energies near zero remain limited by the
+# cancellation in t† H t.
+function rayleigh_energies_kernel!(E, T, H, status, nb)
+    n = size(T, 1)
+    L = n ÷ 2
+    idx = Int(Metal.thread_position_in_grid_1d())
+    (j, b) = (mod1(idx, n), cld(idx, n))
+    (b > nb || status[b] != STATUS_OK) && return
+    num = zero(ComplexF32)
+    den = 0f0
+    for k in 1:n
+        x = zero(ComplexF32)
+        for i in 1:n
+            x += H[k, i, b] * T[i, j, b]
+        end
+        tk = T[k, j, b]
+        num += conj(tk) * x
+        den += ifelse(k <= L, 1f0, -1f0) * abs2(tk)
+    end
+    E[j, b] = real(num) / den
+    return
+end
+
 function Sunny.vendor_bogoliubov!(T::Metal.MtlArray{ComplexF32, 3}, E::Metal.MtlArray{Float32, 2},
                                   H::Metal.MtlArray{ComplexF32, 3}, nb, status::Metal.MtlArray{Int32, 1})
     n = size(H, 1)
     n <= MAX_N || error("Metal eigensolver supports n ≤ $MAX_N, got $n; use `to_device(swt; eigensolver=:host)`")
+    # The kernels overwrite H with its Cholesky factor
+    H0 = H[:, :, 1:nb]
     A = similar(H, n, n, nb)
     if n <= SIMD_WIDTH
         W = tile_width(n)
@@ -254,6 +284,9 @@ function Sunny.vendor_bogoliubov!(T::Metal.MtlArray{ComplexF32, 3}, E::Metal.Mtl
     end
     # The λ in E are copied before E is overwritten by the energies
     Sunny.finish_vendor_bogoliubov!(T, E, E, nb, status)
+    threads = 256
+    Metal.@metal threads groups=cld(n * nb, threads) rayleigh_energies_kernel!(E, T, H0, status, nb)
     Metal.unsafe_free!(A)
+    Metal.unsafe_free!(H0)
     return
 end
