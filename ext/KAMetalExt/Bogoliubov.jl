@@ -1,5 +1,6 @@
 # The batched Bogoliubov transformation of `Sunny.vendor_bogoliubov!` on Metal,
-# in Float32 for n ≤ 32, with one tile per Hamiltonian, as the scalar
+# in Float32 for n ≤ 256, with one tile per Hamiltonian for n ≤ 32, and one
+# SIMD group per Hamiltonian beyond, as the scalar
 # `bogoliubov_householder!` of test/test_householder_ql.jl. The generalized
 # problem Ĩ t = λ H t is reduced by the Cholesky factor H = K K† to the
 # Hermitian A = K⁻¹ Ĩ K⁻†, whose eigenvectors y give t = K⁻† y, with t† H t = 1.
@@ -13,8 +14,9 @@
 
 const STATUS_NONFINITE = Int32(-1)
 
-# The largest n of the tiled kernels
-const MAX_N = 32
+# The largest n, with the workspace of a single SIMD group, 8 KiB of threadgroup
+# memory, within the 32 KiB of a threadgroup
+const MAX_N = 256
 Sunny.vendor_bogoliubov_max_size(::Metal.MetalBackend) = MAX_N
 
 # On entry H[:, :, b] for b ≤ nb. On exit, T[:, :, b] holds the t and E[:, b]
@@ -130,14 +132,126 @@ function bogoliubov_tiled_kernel!(T, E, H, A, status, nb, ::Val{W}) where W
     return
 end
 
+# As `bogoliubov_tiled_kernel!`, for n > 32 with one SIMD group per
+# Hamiltonian, and the workspace of `eigen_group!`. Lane ℓ owns rows or columns
+# ℓ, ℓ+32, …. Its control flow is uniform over the SIMD group, so barriers may
+# appear anywhere, and the pivots of Cholesky are computed redundantly by every
+# lane from rows in device memory.
+function bogoliubov_group_kernel!(T, E, H, A, status, nb, ::Val{NP}, ::Val{G}) where {NP, G}
+    n = size(H, 1)
+    L = n ÷ 2
+    b = (Int(Metal.thread_position_in_grid_1d()) - 1) ÷ SIMD_WIDTH + 1
+    ws = group_workspace(Val(NP), Val(G))
+    b > nb && return
+    g = Int(Metal.simdgroup_index_in_threadgroup())
+    lane = Int(thread_index_in_simdgroup())
+    own = lane:SIMD_WIDTH:n
+    st = STATUS_OK
+
+    bad = false
+    for i in own, j in 1:n
+        bad |= !isfinite(H[i, j, b])
+    end
+    tile_max(Int32(bad), Val(SIMD_WIDTH)) > 0 && (st = STATUS_NONFINITE)
+
+    # Lower Cholesky factor K in H, by rows
+    if st == STATUS_OK
+        for j in 1:n
+            dj = real(H[j, j, b])
+            for k in 1:j-1
+                dj -= abs2(H[j, k, b])
+            end
+            if !(dj > 0)
+                st = Int32(j)
+                break
+            end
+            dj = sqrt(dj)
+            for i in own
+                if i > j
+                    x = H[i, j, b]
+                    for k in 1:j-1
+                        x -= H[i, k, b] * conj(H[j, k, b])
+                    end
+                    H[i, j, b] = x / dj
+                end
+            end
+            group_sync()
+            lane == 1 && (H[j, j, b] = dj)
+            group_sync()
+        end
+    end
+
+    if st == STATUS_OK
+        # B = K⁻¹ Ĩ in T, by columns
+        for c in own
+            for r in 1:c-1
+                T[r, c, b] = 0
+            end
+            for r in c:n
+                x = r == c ? ComplexF32(c <= L ? 1 : -1) : zero(ComplexF32)
+                for k in c:r-1
+                    x -= H[r, k, b] * T[k, c, b]
+                end
+                T[r, c, b] = x / real(H[r, r, b])
+            end
+        end
+        group_sync()
+
+        # A = K⁻¹ B†, by columns
+        for c in own
+            for r in 1:n
+                x = conj(T[c, r, b])
+                for k in 1:r-1
+                    x -= H[r, k, b] * A[k, c, b]
+                end
+                A[r, c, b] = x / real(H[r, r, b])
+            end
+        end
+        group_sync()
+
+        # Exactly Hermitian, from the lower triangle, by rows
+        for i in own
+            for j in i+1:n
+                A[i, j, b] = conj(A[j, i, b])
+            end
+            A[i, i, b] = real(A[i, i, b])
+        end
+        group_sync()
+
+        eigen_group!(E, T, A, b, ws, g) || (st = STATUS_NOCONVERGE)
+    end
+
+    # t = K⁻† y in T, by columns
+    if st == STATUS_OK
+        for c in own
+            for r in n:-1:1
+                x = T[r, c, b]
+                for k in r+1:n
+                    x -= conj(H[k, r, b]) * T[k, c, b]
+                end
+                T[r, c, b] = x / real(H[r, r, b])
+            end
+        end
+    end
+
+    lane == 1 && (status[b] = st)
+    return
+end
+
 function Sunny.vendor_bogoliubov!(T::Metal.MtlArray{ComplexF32, 3}, E::Metal.MtlArray{Float32, 2},
                                   H::Metal.MtlArray{ComplexF32, 3}, nb, status::Metal.MtlArray{Int32, 1})
     n = size(H, 1)
     n <= MAX_N || error("Metal eigensolver supports n ≤ $MAX_N, got $n; use `to_device(swt; eigensolver=:host)`")
-    W = tile_width(n)
     A = similar(H, n, n, nb)
-    threads = 256
-    Metal.@metal threads groups=cld(nb * W, threads) bogoliubov_tiled_kernel!(T, E, H, A, status, nb, Val(W))
+    if n <= SIMD_WIDTH
+        W = tile_width(n)
+        threads = 256
+        Metal.@metal threads groups=cld(nb * W, threads) bogoliubov_tiled_kernel!(T, E, H, A, status, nb, Val(W))
+    else
+        NP = group_padded(n)
+        G = group_count(NP)
+        Metal.@metal threads=SIMD_WIDTH*G groups=cld(nb, G) bogoliubov_group_kernel!(T, E, H, A, status, nb, Val(NP), Val(G))
+    end
     # The λ in E are copied before E is overwritten by the energies
     Sunny.finish_vendor_bogoliubov!(T, E, E, nb, status)
     Metal.unsafe_free!(A)

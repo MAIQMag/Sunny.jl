@@ -139,7 +139,7 @@ Goldstone modes, remain stable.
 
 The batched `eigensolver` for the Bogoliubov transformation may be `:host`
 (LAPACK on the host), `:vendor` (cuSOLVER or rocSOLVER, the default when CUDA
-or AMDGPU is loaded, or a Householder–QL kernel on Metal for at most 16 bands),
+or AMDGPU is loaded, or a Householder–QL kernel on Metal for at most 128 bands),
 or `:jacobi` (a portable kernel, efficient for small matrices).
 The default is `:host` for `KernelAbstractions.CPU()`. Otherwise it is
 `:vendor` if available, else `:jacobi` for at most 4 bands and `:host` beyond.

@@ -1,6 +1,6 @@
 # Metal-specific hooks for KAExt. Metal Performance Shaders lacks a batched
 # Hermitian eigensolver, so `Sunny.vendor_bogoliubov!` is a port of
-# EigenG-Batched to Metal, in Float32 for n ≤ 32. Beyond, KAExt falls back to
+# EigenG-Batched to Metal, in Float32 for n ≤ 256. Beyond, KAExt falls back to
 # its :host or :jacobi eigensolvers.
 module KAMetalExt
 

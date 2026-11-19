@@ -1,7 +1,8 @@
-# A batched Hermitian eigensolver in Float32 for matrices of size n ≤ 32, with
-# one tile of W ≥ n lanes per matrix, after the tiled kernels of EigenG-Batched
-# (RIKEN) for CUDA and HIP: Householder reduction to tridiagonal form, implicit
-# QL, and back-transformation. EigenG is real symmetric. Here the reduction is
+# A batched Hermitian eigensolver in Float32, with one tile of W ≥ n lanes per
+# matrix for n ≤ 32, after the tiled kernels of EigenG-Batched (RIKEN) for CUDA
+# and HIP, and one SIMD group per matrix beyond, after its warp kernel:
+# Householder reduction to tridiagonal form, implicit QL, and
+# back-transformation. EigenG is real symmetric. Here the reduction is
 # the complex one of LAPACK's zhetd2, whose reflectors leave a real tridiagonal
 # for the QL iteration of EISPACK's tql2. The scalar reference, against which
 # this kernel is tested, is `HouseholderQL` in test/test_householder_ql.jl.
@@ -239,5 +240,255 @@ function hermitian_eigen_tiled!(λ::Metal.MtlMatrix{Float32}, Y::Metal.MtlArray{
     W = tile_width(n)
     threads = 256
     Metal.@metal threads groups=cld(nb * W, threads) hermitian_eigen_tiled_kernel!(λ, Y, A, status, Val(W))
+    return
+end
+
+# For n > 32, one SIMD group per matrix, after the warp kernel of EigenG. Lane ℓ
+# owns rows (or columns) ℓ, ℓ+32, ℓ+64, …, and the tridiagonal (d, e), the
+# reflector scalars τ, and the vectors v and z of each reflection are in
+# threadgroup memory, one slice per SIMD group. A SIMD group then holds a
+# single matrix, so its control flow is uniform, and barriers may appear
+# anywhere. The scalar recurrences run redundantly on every lane, and lane 1
+# stores their results, between barriers.
+
+const SIMD_WIDTH = 32
+
+# Orders device and threadgroup memory within the SIMD group
+@inline group_sync() = simdgroup_barrier(MemoryFlagDevice | MemoryFlagThreadGroup)
+
+# Workspace in threadgroup memory per SIMD group, for n ≤ NP, and the number G
+# of SIMD groups per threadgroup that keeps it within 16 KiB
+group_padded(n) = cld(n, SIMD_WIDTH) * SIMD_WIDTH
+group_bytes(NP) = NP * (2sizeof(Float32) + 3sizeof(ComplexF32))
+group_count(NP) = clamp(16384 ÷ group_bytes(NP), 1, 8)
+
+@inline function group_workspace(::Val{NP}, ::Val{G}) where {NP, G}
+    return (Metal.MtlThreadGroupArray(Float32, (NP, G)), Metal.MtlThreadGroupArray(Float32, (NP, G)),
+            Metal.MtlThreadGroupArray(ComplexF32, (NP, G)), Metal.MtlThreadGroupArray(ComplexF32, (NP, G)),
+            Metal.MtlThreadGroupArray(ComplexF32, (NP, G)))
+end
+
+# As `eigen_tile!`, for the matrix b of a SIMD group with slice g of the
+# workspace `ws = (d, e, τ, v, z)`. Called by every lane of the SIMD group.
+@inline function eigen_group!(λ, Y, A, b, ws, g)
+    (td, te, tτ, tv, tz) = ws
+    n = size(A, 1)
+    lane = Int(thread_index_in_simdgroup())
+    rows = lane:SIMD_WIDTH:n
+    sumg(x) = tile_sum(x, Val(SIMD_WIDTH))
+
+    # Householder reduction, as `eigen_tile!`
+    for k in 1:n-1
+        s2 = 0f0
+        for i in rows
+            i >= k + 2 && (s2 += abs2(A[i, k, b]))
+        end
+        xnorm = sqrt(sumg(s2))
+        α = A[k+1, k, b]
+        trivial = (xnorm == 0) & (imag(α) == 0)
+        β = trivial ? real(α) : -copysign(hypot32(real(α), imag(α), xnorm), real(α))
+        τ = trivial ? zero(ComplexF32) : ComplexF32((β - real(α)) / β, -imag(α) / β)
+        scale = trivial ? one(ComplexF32) : cinv(α - β)
+        group_sync()
+        for i in rows
+            if i >= k + 1
+                v = i == k + 1 ? one(ComplexF32) : A[i, k, b] * scale
+                A[i, k, b] = v
+                tv[i, g] = v
+            end
+        end
+        if lane == 1
+            te[k, g] = β
+            tτ[k, g] = τ
+        end
+        group_sync()
+
+        # w = τ A₂₂ v, then z = w - ½|τ|² (v† A₂₂ v) v
+        dot = zero(ComplexF32)
+        for i in rows
+            if i >= k + 1
+                x = zero(ComplexF32)
+                for j in k+1:n
+                    x += A[i, j, b] * tv[j, g]
+                end
+                w = τ * x
+                tz[i, g] = w
+                dot += conj(w) * tv[i, g]
+            end
+        end
+        α2 = -(τ / 2) * sumg(dot)
+        for i in rows
+            i >= k + 1 && (tz[i, g] += α2 * tv[i, g])
+        end
+        group_sync()
+
+        # A₂₂ ← A₂₂ - v z† - z v†, by rows
+        for i in rows
+            if i >= k + 1
+                (vi, zi) = (tv[i, g], tz[i, g])
+                for j in k+1:n
+                    A[i, j, b] -= vi * conj(tz[j, g]) + zi * conj(tv[j, g])
+                end
+            end
+        end
+        group_sync()
+    end
+    for i in rows
+        td[i, g] = real(A[i, i, b])
+        for j in 1:n
+            Y[i, j, b] = i == j
+        end
+    end
+    lane == 1 && (te[n, g] = 0f0)
+    group_sync()
+
+    # Implicit QL, as `eigen_tile!`, on (d, e) in threadgroup memory
+    f = 0f0
+    tst1 = 0f0
+    converged = true
+    for l in 1:n
+        tst1 = max(tst1, abs(td[l, g]) + abs(te[l, g]))
+        m = l
+        while m < n && abs(te[m, g]) > eps(Float32) * tst1
+            m += 1
+        end
+        if m > l
+            iter = 0
+            while true
+                if (iter += 1) > 30
+                    converged = false
+                    break
+                end
+                g0 = td[l, g]
+                e_l = te[l, g]
+                p = (td[l+1, g] - g0) / 2e_l
+                r = hypot32(p, 1f0)
+                r = p < 0 ? -r : r
+                d_l = e_l / (p + r)
+                dl1 = e_l * (p + r)
+                h = g0 - d_l
+                group_sync()
+                if lane == 1
+                    td[l, g] = d_l
+                    td[l+1, g] = dl1
+                end
+                for i in rows
+                    i >= l + 2 && (td[i, g] -= h)
+                end
+                f += h
+                group_sync()
+
+                p = td[m, g]
+                (c, c2, c3) = (1f0, 1f0, 1f0)
+                el1 = te[l+1, g]
+                (s, s2) = (0f0, 0f0)
+                for ii in m-1:-1:l
+                    c3 = c2
+                    c2 = c
+                    s2 = s
+                    (e_i, d_i) = (te[ii, g], td[ii, g])
+                    g1 = c * e_i
+                    h1 = c * p
+                    r = hypot32(p, e_i)
+                    e_next = s * r
+                    s = e_i / r
+                    c = p / r
+                    p = c * d_i - s * g1
+                    d_next = h1 + s * (c * g1 + s * d_i)
+                    group_sync()
+                    if lane == 1
+                        te[ii+1, g] = e_next
+                        td[ii+1, g] = d_next
+                    end
+                    for i in rows
+                        (y0, y1) = (Y[i, ii, b], Y[i, ii+1, b])
+                        Y[i, ii+1, b] = s * y0 + c * y1
+                        Y[i, ii, b] = c * y0 - s * y1
+                    end
+                end
+                p = -s * s2 * c3 * el1 * e_l / dl1
+                group_sync()
+                if lane == 1
+                    te[l, g] = s * p
+                    td[l, g] = c * p
+                end
+                group_sync()
+                abs(s * p) > eps(Float32) * tst1 || break
+            end
+            converged || break
+        end
+        group_sync()
+        if lane == 1
+            td[l, g] += f
+            te[l, g] = 0f0
+        end
+        group_sync()
+    end
+
+    if converged
+        # Selection sort, ascending, by the first minimal index
+        for ii in 1:n-1
+            kmin = ii
+            dmin = td[ii, g]
+            for j in ii+1:n
+                dj = td[j, g]
+                if dj < dmin
+                    dmin = dj
+                    kmin = j
+                end
+            end
+            if kmin != ii
+                d_i = td[ii, g]
+                group_sync()
+                if lane == 1
+                    td[ii, g] = dmin
+                    td[kmin, g] = d_i
+                end
+                for i in rows
+                    (Y[i, ii, b], Y[i, kmin, b]) = (Y[i, kmin, b], Y[i, ii, b])
+                end
+                group_sync()
+            end
+        end
+
+        # Y ← Hₖ Y for k = n-1, …, 1, by columns
+        group_sync()
+        for j in rows
+            for k in n-1:-1:1
+                x = zero(ComplexF32)
+                for i in k+1:n
+                    x += conj(A[i, k, b]) * Y[i, j, b]
+                end
+                x *= tτ[k, g]
+                for i in k+1:n
+                    Y[i, j, b] -= A[i, k, b] * x
+                end
+            end
+        end
+        for i in rows
+            λ[i, b] = td[i, g]
+        end
+    end
+    group_sync()
+    return converged
+end
+
+function hermitian_eigen_group_kernel!(λ, Y, A, status, ::Val{NP}, ::Val{G}) where {NP, G}
+    b = (Int(Metal.thread_position_in_grid_1d()) - 1) ÷ SIMD_WIDTH + 1
+    ws = group_workspace(Val(NP), Val(G))
+    b > size(A, 3) && return
+    g = Int(Metal.simdgroup_index_in_threadgroup())
+    converged = eigen_group!(λ, Y, A, b, ws, g)
+    thread_index_in_simdgroup() == 1 && (status[b] = converged ? STATUS_OK : STATUS_NOCONVERGE)
+    return
+end
+
+function hermitian_eigen_group!(λ::Metal.MtlMatrix{Float32}, Y::Metal.MtlArray{ComplexF32, 3},
+                                A::Metal.MtlArray{ComplexF32, 3}, status::Metal.MtlVector{Int32})
+    n = size(A, 1)
+    nb = size(A, 3)
+    NP = group_padded(n)
+    G = group_count(NP)
+    Metal.@metal threads=SIMD_WIDTH*G groups=cld(nb, G) hermitian_eigen_group_kernel!(λ, Y, A, status, Val(NP), Val(G))
     return
 end

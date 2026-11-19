@@ -41,6 +41,32 @@
         end
     end
 
+    # One SIMD group per matrix for n > 32, with 1 to 8 rows per lane, and
+    # workspaces for 8, 5, 4 and 2 SIMD groups per threadgroup
+    for n in (33, 40, 54, 64, 65, 100, 128, 200, 256)
+        nb = 11
+        As = zeros(ComplexF32, n, n, nb)
+        for b in 1:nb
+            X = randn(rng, ComplexF32, n, n)
+            As[:, :, b] = X + X'
+        end
+        A = MtlArray(As)
+        Y = MtlArray(zeros(ComplexF32, n, n, nb))
+        λ = MtlArray(zeros(Float32, n, nb))
+        status = MtlArray(fill(Int32(99), nb))
+        MT.hermitian_eigen_group!(λ, Y, A, status)
+        (λ, Y, status) = Array.((λ, Y, status))
+        @test all(==(0), status)
+        for b in 1:nb
+            A0 = ComplexF64.(As[:, :, b])
+            tol = 10n * eps(Float32) * opnorm(A0)
+            @test issorted(λ[:, b])
+            @test λ[:, b] ≈ eigvals(Hermitian(A0)) atol=tol
+            @test opnorm(A0 * Y[:, :, b] - Y[:, :, b] * Diagonal(λ[:, b])) < tol
+            @test opnorm(Y[:, :, b]' * Y[:, :, b] - I) < 10n * eps(Float32)
+        end
+    end
+
     # Degenerate spectra, a diagonal matrix (trivial reflectors), a complex
     # subdiagonal with an otherwise trivial column, and zero, in one batch of
     # tile width 8 so that each tile of a SIMD group takes its own path

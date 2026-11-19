@@ -57,9 +57,11 @@
             E_h = Sunny.bogoliubov!(T_h, copy(Hs[b]))
             @test E[:, b] ≈ E_h rtol=rtol
             # Para-unitary, T† Ĩ T = Ĩ, and each eigenvector is defined up to
-            # a phase
+            # a phase. The error of an eigenvector grows as its eigenvalue gap
+            # shrinks, which it does with n, so the phases are compared by the
+            # largest entry rather than the norm of all n² entries.
             @test T[:, :, b]' * Ĩ * T[:, :, b] ≈ Ĩ atol=atol
-            @test abs.(T[:, :, b]' * Ĩ * T_h) ≈ I(n) atol=atol
+            @test maximum(abs, abs.(T[:, :, b]' * Ĩ * T_h) - I(n)) < atol
         end
         # The extra Hamiltonian beyond nb is untouched
         @test iszero(T[:, :, nb+1]) && iszero(E[:, nb+1])
@@ -377,14 +379,15 @@ end
     @test Sunny.device_free_memory(backend) > 0
 
     # The vendor eigensolver, a port of EigenG-Batched, for matrices of every
-    # tile width up to its limit of n = 32
-    for L in (1, 2, 3, 4, 8, 16)
+    # tile width, n ≤ 32, and with one SIMD group per matrix up to its limit of
+    # n = 256
+    for L in (1, 2, 3, 4, 8, 16, 17, 20, 27, 64, 128)
         test_vendor_bogoliubov(backend, Float32; L)
     end
 
-    # The :SUN model, with n = 40, exceeds the vendor eigensolver
+    # The :SUN model has n = 40, beyond the tiles
     for eigensolver in (:vendor, :jacobi, :host)
-        for mode in (eigensolver == :vendor ? (:dipole,) : (:dipole, :SUN))
+        for mode in (:dipole, :SUN)
             sys = fcc_afm(mode)
             swt = SpinWaveTheory(sys; measure=ssf_perp(sys; formfactors=[1 => FormFactor("Co2")]))
             swt_d = test_device_intensities(swt, backend; eigensolver)
@@ -399,11 +402,13 @@ end
     test_device_intensities(SpinWaveTheory(sys; measure=ssf_perp(sys)), backend; eigensolver=:vendor)
 
     # The vendor eigensolver is the default within its limit, and otherwise
-    # :host, as without one
-    swt = SpinWaveTheory(fcc_afm(:dipole); measure=nothing)
-    @test to_device(swt; backend).eigensolver == :vendor
-    swt = SpinWaveTheory(fcc_afm(:SUN); measure=nothing)
+    # :host, as without one. 200 sites give n = 400.
+    for mode in (:dipole, :SUN)
+        swt = SpinWaveTheory(fcc_afm(mode); measure=nothing)
+        @test to_device(swt; backend).eigensolver == :vendor
+    end
+    swt = SpinWaveTheory(repeat_periodically(fcc_afm(:dipole), (5, 5, 2)); measure=nothing)
     @test to_device(swt; backend).eigensolver == :host
-    @test_throws "at most 16 bands" to_device(swt; backend, eigensolver=:vendor)
+    @test_throws "at most 128 bands" to_device(swt; backend, eigensolver=:vendor)
     @test_throws "Float64" to_device(swt; backend, precision=Float64)
 end
