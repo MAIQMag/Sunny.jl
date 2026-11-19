@@ -4,6 +4,8 @@
 # `bogoliubov_householder!` of test/test_householder_ql.jl. The generalized
 # problem Ĩ t = λ H t is reduced by the Cholesky factor H = K K† to the
 # Hermitian A = K⁻¹ Ĩ K⁻†, whose eigenvectors y give t = K⁻† y, with t† H t = 1.
+# The eigenvalues are then recomputed as Rayleigh quotients of the original H,
+# by `rayleigh_column!`.
 #
 # Cholesky and the eigensolver work by rows, with one lane per row, and the
 # triangular solves by columns, with one lane per column. Between them, a
@@ -19,11 +21,44 @@ const STATUS_NONFINITE = Int32(-1)
 const MAX_N = 256
 Sunny.vendor_bogoliubov_max_size(::Metal.MetalBackend) = MAX_N
 
+# The Rayleigh quotient λ = (t† Ĩ t) / (t† H t) of column c of T, for the
+# original H, whose strict upper triangle Cholesky leaves intact and whose
+# diagonal is saved in D. The column is rescaled so that t† H t = 1 holds, and λ
+# is stored in E, so that `Sunny.finish_vendor_bogoliubov!` makes the energy
+# 1/λ and the normalization T† Ĩ T = Ĩ consistent with it. The quotient is
+# stationary at an eigenvector, so the O(δ) error of t gives an O(δ²) error in
+# λ. In Float32, for the √3×√3 kagome model at the device regularization, the
+# relative error of energies above 5% of the largest fell from 3.0e-3 to
+# 1.9e-4. Energies near zero remain limited by the cancellation in t† H t. All
+# lanes read the same entries of H at once, and each its own column of T.
+@inline function rayleigh_column!(T, E, H, D, c, b)
+    n = size(T, 1)
+    L = n ÷ 2
+    num = 0f0
+    den = 0f0
+    for k in 1:n
+        x = zero(ComplexF32)
+        for i in 1:n
+            hki = i > k ? H[k, i, b] : (i < k ? conj(H[i, k, b]) : ComplexF32(D[k, b]))
+            x += hki * T[i, c, b]
+        end
+        tk = T[k, c, b]
+        num += real(conj(tk) * x)
+        den += ifelse(k <= L, 1f0, -1f0) * abs2(tk)
+    end
+    scale = 1 / sqrt(num)
+    for k in 1:n
+        T[k, c, b] *= scale
+    end
+    E[c, b] = den / num
+    return
+end
+
 # On entry H[:, :, b] for b ≤ nb. On exit, T[:, :, b] holds the t and E[:, b]
-# the λ ascending, as `Sunny.finish_vendor_bogoliubov!` expects, where the
-# status is STATUS_OK. H is overwritten by K in its lower triangle, and the
-# workspace A by the reflectors.
-function bogoliubov_tiled_kernel!(T, E, H, A, status, nb, ::Val{W}) where W
+# the λ, as `Sunny.finish_vendor_bogoliubov!` expects, where the status is
+# STATUS_OK. H is overwritten by K in its lower triangle and on its diagonal,
+# whose original values D[:, b] keeps, and the workspace A by the reflectors.
+function bogoliubov_tiled_kernel!(T, E, H, A, D, status, nb, ::Val{W}) where W
     n = size(H, 1)
     L = n ÷ 2
     b0 = (Int(Metal.thread_position_in_grid_1d()) - 1) ÷ W + 1
@@ -41,6 +76,7 @@ function bogoliubov_tiled_kernel!(T, E, H, A, status, nb, ::Val{W}) where W
         for j in 1:n
             bad |= !isfinite(H[i, j, b])
         end
+        D[i, b] = real(H[i, i, b])
     end
     tile_max(Int32(bad), Val(W)) > 0 && (st = STATUS_NONFINITE)
 
@@ -126,6 +162,7 @@ function bogoliubov_tiled_kernel!(T, E, H, A, status, nb, ::Val{W}) where W
             end
             T[r, c, b] = x / real(H[r, r, b])
         end
+        rayleigh_column!(T, E, H, D, c, b)
     end
 
     (active & (lane == 1)) && (status[b] = st)
@@ -137,7 +174,7 @@ end
 # ℓ owns rows or columns ℓ, ℓ+32, …. Its control flow is uniform over the SIMD
 # group, so barriers may appear anywhere, and the pivots of Cholesky are
 # computed redundantly by every lane from rows in device memory.
-function bogoliubov_group_kernel!(T, E, H, A, Z, status, nb, ::Val{NP}, ::Val{G}) where {NP, G}
+function bogoliubov_group_kernel!(T, E, H, A, Z, D, status, nb, ::Val{NP}, ::Val{G}) where {NP, G}
     n = size(H, 1)
     L = n ÷ 2
     b = (Int(Metal.thread_position_in_grid_1d()) - 1) ÷ SIMD_WIDTH + 1
@@ -149,8 +186,11 @@ function bogoliubov_group_kernel!(T, E, H, A, Z, status, nb, ::Val{NP}, ::Val{G}
     st = STATUS_OK
 
     bad = false
-    for i in own, j in 1:n
-        bad |= !isfinite(H[i, j, b])
+    for i in own
+        for j in 1:n
+            bad |= !isfinite(H[i, j, b])
+        end
+        D[i, b] = real(H[i, i, b])
     end
     tile_max(Int32(bad), Val(SIMD_WIDTH)) > 0 && (st = STATUS_NONFINITE)
 
@@ -231,6 +271,7 @@ function bogoliubov_group_kernel!(T, E, H, A, Z, status, nb, ::Val{NP}, ::Val{G}
                 end
                 T[r, c, b] = x / real(H[r, r, b])
             end
+            rayleigh_column!(T, E, H, D, c, b)
         end
     end
 
@@ -238,57 +279,26 @@ function bogoliubov_group_kernel!(T, E, H, A, Z, status, nb, ::Val{NP}, ::Val{G}
     return
 end
 
-# The energies of the finished T, recomputed as Rayleigh quotients of the
-# original H, ε = (t† H t) / (t† Ĩ t) for each column t, with one thread per
-# column. The quotient is stationary at an eigenvector, so the O(δ) error of a
-# t gives an O(δ²) error in ε. In Float32, for the √3×√3 kagome model at the
-# device regularization, the relative error of energies above 5% of the largest
-# fell from 3.0e-3 to 1.9e-4. Energies near zero remain limited by the
-# cancellation in t† H t.
-function rayleigh_energies_kernel!(E, T, H, status, nb)
-    n = size(T, 1)
-    L = n ÷ 2
-    idx = Int(Metal.thread_position_in_grid_1d())
-    (j, b) = (mod1(idx, n), cld(idx, n))
-    (b > nb || status[b] != STATUS_OK) && return
-    num = zero(ComplexF32)
-    den = 0f0
-    for k in 1:n
-        x = zero(ComplexF32)
-        for i in 1:n
-            x += H[k, i, b] * T[i, j, b]
-        end
-        tk = T[k, j, b]
-        num += conj(tk) * x
-        den += ifelse(k <= L, 1f0, -1f0) * abs2(tk)
-    end
-    E[j, b] = real(num) / den
-    return
-end
-
 function Sunny.vendor_bogoliubov!(T::Metal.MtlArray{ComplexF32, 3}, E::Metal.MtlArray{Float32, 2},
                                   H::Metal.MtlArray{ComplexF32, 3}, nb, status::Metal.MtlArray{Int32, 1})
     n = size(H, 1)
     n <= MAX_N || error("Metal eigensolver supports n ≤ $MAX_N, got $n; use `to_device(swt; eigensolver=:host)`")
-    # The kernels overwrite H with its Cholesky factor
-    H0 = H[:, :, 1:nb]
     A = similar(H, n, n, nb)
+    D = similar(E, n, nb)
     if n <= SIMD_WIDTH
         W = tile_width(n)
         threads = 256
-        Metal.@metal threads groups=cld(nb * W, threads) bogoliubov_tiled_kernel!(T, E, H, A, status, nb, Val(W))
+        Metal.@metal threads groups=cld(nb * W, threads) bogoliubov_tiled_kernel!(T, E, H, A, D, status, nb, Val(W))
     else
         NP = group_padded(n)
         G = group_count(NP)
         Z = similar(E, n, n, nb)
-        Metal.@metal threads=SIMD_WIDTH*G groups=cld(nb, G) bogoliubov_group_kernel!(T, E, H, A, Z, status, nb, Val(NP), Val(G))
+        Metal.@metal threads=SIMD_WIDTH*G groups=cld(nb, G) bogoliubov_group_kernel!(T, E, H, A, Z, D, status, nb, Val(NP), Val(G))
         Metal.unsafe_free!(Z)
     end
     # The λ in E are copied before E is overwritten by the energies
     Sunny.finish_vendor_bogoliubov!(T, E, E, nb, status)
-    threads = 256
-    Metal.@metal threads groups=cld(n * nb, threads) rayleigh_energies_kernel!(E, T, H0, status, nb)
     Metal.unsafe_free!(A)
-    Metal.unsafe_free!(H0)
+    Metal.unsafe_free!(D)
     return
 end
