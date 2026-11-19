@@ -194,6 +194,12 @@ function vendor_bogoliubov! end
 # limited by ext/KAMetalExt.
 function vendor_bogoliubov_max_size end
 
+# The smallest matrix size n for which `vendor_bogoliubov!` is the default
+# eigensolver of a backend, as `vendor_bogoliubov_min_default_size(backend)`.
+# 1 by default in ext/KAExt, and raised by ext/KAMetalExt, where the Jacobi
+# kernel is faster for the smallest matrices.
+function vendor_bogoliubov_min_default_size end
+
 # The steps shared by methods of `vendor_bogoliubov!`, after a vendor solver of
 # Ĩ t = λ H t, as `finish_vendor_bogoliubov!(T, E, λ, nb, status)`. Defined by
 # ext/KAExt, which documents it.

@@ -371,7 +371,8 @@ end
 
 # Metal lacks Float64, so the device works in Float32, and a vendor eigensolver
 @testitem "KAExt intensities on Metal" tags=[:gpu, :metal] setup=[KAModels] begin
-    using .KAModels: fcc_afm, entangled_dimers, test_device_intensities, test_device_instability, test_vendor_bogoliubov
+    using .KAModels: fcc_afm, entangled_dimers, unstable_chain, test_device_intensities, test_device_instability,
+                     test_vendor_bogoliubov
     import Metal
     backend = Metal.MetalBackend()
 
@@ -401,8 +402,13 @@ end
     sys = entangled_dimers()
     test_device_intensities(SpinWaveTheory(sys; measure=ssf_perp(sys)), backend; eigensolver=:vendor)
 
-    # The vendor eigensolver is the default within its limit, and otherwise
-    # :host, as without one. 200 sites give n = 400.
+    # The vendor eigensolver is the default within its limits, :jacobi for at
+    # most 2 bands, and otherwise :host, as without one. 200 sites give n = 400.
+    for sys in (unstable_chain(), repeat_periodically(unstable_chain(), (2, 1, 1)))
+        swt = SpinWaveTheory(sys; measure=nothing)
+        @test to_device(swt; backend).eigensolver == :jacobi
+        @test to_device(swt; backend, eigensolver=:vendor).eigensolver == :vendor
+    end
     for mode in (:dipole, :SUN)
         swt = SpinWaveTheory(fcc_afm(mode); measure=nothing)
         @test to_device(swt; backend).eigensolver == :vendor

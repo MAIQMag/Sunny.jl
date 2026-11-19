@@ -21,6 +21,12 @@ const STATUS_NONFINITE = Int32(-1)
 const MAX_N = 256
 Sunny.vendor_bogoliubov_max_size(::Metal.MetalBackend) = MAX_N
 
+# For n ≤ 4, the per-call costs of allocation and `finish_vendor_bogoliubov!`
+# outweigh the solve, and on an Apple M5 Pro the :jacobi kernel was faster,
+# e.g. 0.08 vs 0.14 µs per matrix for 65536 matrices with n = 4. For n = 8,
+# :vendor was 2× faster.
+Sunny.vendor_bogoliubov_min_default_size(::Metal.MetalBackend) = 5
+
 # The Rayleigh quotient λ = (t† Ĩ t) / (t† H t) of column c of T, for the
 # original H, whose strict upper triangle Cholesky leaves intact and whose
 # diagonal is saved in D. The column is rescaled so that t† H t = 1 holds, and λ

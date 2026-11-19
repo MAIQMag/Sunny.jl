@@ -84,6 +84,7 @@ precision_of(::SpinWaveTheoryDevice{F}) where F = F
 # Whether an extension provides `Sunny.vendor_bogoliubov!` for `backend` in
 # precision F, for n×n matrices
 Sunny.vendor_bogoliubov_max_size(_) = typemax(Int)
+Sunny.vendor_bogoliubov_min_default_size(_) = 1
 function has_vendor_bogoliubov(backend, F, n)
     H = KA.allocate(backend, Complex{F}, (2, 2, 1))
     E = KA.allocate(backend, F, (2, 1))
@@ -102,7 +103,9 @@ end
 function resolve_eigensolver(backend, eigensolver, n, F)
     if isnothing(eigensolver)
         backend isa KA.CPU && return :host
-        has_vendor_bogoliubov(backend, F, n) && return :vendor
+        if has_vendor_bogoliubov(backend, F, n) && n >= Sunny.vendor_bogoliubov_min_default_size(backend)
+            return :vendor
+        end
         return n <= 8 ? :jacobi : :host
     end
     eigensolver in (:host, :jacobi, :vendor) || error("Unknown eigensolver $(repr(eigensolver)); use :host, :jacobi or :vendor")
@@ -142,7 +145,8 @@ The batched `eigensolver` for the Bogoliubov transformation may be `:host`
 or AMDGPU is loaded, or a Householder–QL kernel on Metal for at most 128 bands),
 or `:jacobi` (a portable kernel, efficient for small matrices).
 The default is `:host` for `KernelAbstractions.CPU()`. Otherwise it is
-`:vendor` if available, else `:jacobi` for at most 4 bands and `:host` beyond.
+`:vendor` if available, except `:jacobi` on Metal for at most 2 bands, else
+`:jacobi` for at most 4 bands and `:host` beyond.
 
 The measure's combiner is evaluated on device if it is `isbits` and compiles
 for the backend. Otherwise, its forms (see `Sunny.measure_forms`) are evaluated
