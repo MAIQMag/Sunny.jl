@@ -35,23 +35,32 @@ Sunny.vendor_bogoliubov_min_default_size(::Metal.MetalBackend) = 5
 # stationary at an eigenvector, so the O(δ) error of t gives an O(δ²) error in
 # λ. In Float32, for the √3×√3 kagome model at the device regularization, the
 # relative error of energies above 5% of the largest fell from 3.0e-3 to
-# 1.9e-4. Energies near zero remain limited by the cancellation in t† H t. All
-# lanes read the same entries of H at once, and each its own column of T.
+# 1.9e-4. Energies near zero remain limited by the cancellation in t† H t.
+#
+# Since H is Hermitian, t† H t = Σₖ Dₖ |tₖ|² + 2 Re Σₖ tₖ Σᵢ₍ᵢ<ₖ₎ conj(tᵢ) Hᵢₖ
+# needs only the upper triangle, each entry once. All lanes read the same
+# column of H at once, and each its own column of T.
 @inline function rayleigh_column!(T, E, H, D, c, b)
     n = size(T, 1)
     L = n ÷ 2
     num = 0f0
+    off = 0f0
     den = 0f0
     for k in 1:n
-        x = zero(ComplexF32)
-        for i in 1:n
-            hki = i > k ? H[k, i, b] : (i < k ? conj(H[i, k, b]) : ComplexF32(D[k, b]))
-            x += hki * T[i, c, b]
-        end
         tk = T[k, c, b]
-        num += real(conj(tk) * x)
-        den += ifelse(k <= L, 1f0, -1f0) * abs2(tk)
+        s = zero(ComplexF32)
+        for i in 1:k-1
+            s += conj(T[i, c, b]) * H[i, k, b]
+        end
+        off += real(s * tk)
+        a = abs2(tk)
+        num += D[k, b] * a
+        den += ifelse(k <= L, 1f0, -1f0) * a
     end
+    num += 2off
+    # Cancellation may leave no positive num for a soft mode, whose t and λ
+    # from the eigensolver are kept
+    num > 0 || return
     scale = 1 / sqrt(num)
     for k in 1:n
         T[k, c, b] *= scale
