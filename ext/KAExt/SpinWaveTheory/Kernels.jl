@@ -18,6 +18,67 @@
     H[r, r, b] += regularization
 end
 
+# The entry A[cell, i, j] of `Sunny.ewald_interaction_tensor` at the wavevector
+# (q, q0, q0_zero) of `ewald_wavevector`, before the excluded couplings, with
+# `cell` the linear index of a cell of the supercell. The Fourier modes and the
+# real-space terms sum in the order of the host. The phases of the Fourier modes
+# are one `cis` each, rather than products of 1D factors.
+@inline function ewald_entry(p::EwaldTensorDevice{F}, positions, real_ptr, real_shifts, real_mats,
+                             q, q0, q0_zero, ncells, na, cell, i, j) where F
+    (; dims, recipvecs, mmax, kmax², σ², invV) = p
+    c = cell - 1
+    c1 = c % dims[1]
+    c2 = (c ÷ dims[1]) % dims[2]
+    c3 = c ÷ (dims[1] * dims[2])
+    x = (Sunny.SVector{3, F}(c1, c2, c3) + positions[j] - positions[i]) ./ Sunny.SVector{3, F}(dims)
+
+    acc = zero(Sunny.SMatrix{3, 3, Complex{F}, 9})
+    for m1 in -mmax[1]:mmax[1], m2 in -mmax[2]:mmax[2], m3 in -mmax[3]:mmax[3]
+        q0_zero && m1 == m2 == m3 == 0 && continue  # The `demag` term instead
+        mq = Sunny.SVector{3, F}(m1, m2, m3) + q0
+        k = recipvecs * mq
+        k² = dot(k, k)
+        k² <= kmax² || continue
+        Aₖ = (invV * exp(-σ² * k² / 2) / k²) * (k * k')
+        acc += cis(-F(2π) * dot(mq, x)) * Aₖ
+    end
+
+    q0_zero && (acc += p.demag_V)
+    idx = cell + ncells * ((i - 1) + na * (j - 1))
+    for e in real_ptr[idx]:real_ptr[idx+1]-1
+        acc += cis(F(2π) * dot(q, real_shifts[e])) * real_mats[e]
+    end
+    (cell == 1 && i == j) && (acc += p.self_energy)
+    return p.μ0_μB² * acc
+end
+
+# The Ewald tensor Ã[cell, i, j, b] of each wavevector b, mirroring
+# `Sunny.ewald_interaction_tensor`, with its cells in linear order. As on the
+# host, the zero-offset cell is completed by Hermiticity, then the excluded
+# couplings are removed.
+@kernel function ewald_tensor!(Ã, p, @Const(positions), @Const(real_ptr), @Const(real_shifts), @Const(real_mats),
+                               @Const(ex_index), @Const(ex_winding), @Const(ex_mats), @Const(qs), @Const(q0s), @Const(q0_zeros))
+    cell, i, j, b = @index(Global, NTuple)
+    F = real(eltype(eltype(Ã)))
+    ncells = size(Ã, 1)
+    na = size(Ã, 2)
+    q = qs[b]
+    q0 = q0s[b]
+    q0_zero = q0_zeros[b]
+    v = if cell == 1 && i > j
+        ewald_entry(p, positions, real_ptr, real_shifts, real_mats, q, q0, q0_zero, ncells, na, cell, j, i)'
+    else
+        ewald_entry(p, positions, real_ptr, real_shifts, real_mats, q, q0, q0_zero, ncells, na, cell, i, j)
+    end
+    idx = cell + ncells * ((i - 1) + na * (j - 1))
+    for e in eachindex(ex_index)
+        if ex_index[e] == idx
+            v -= cis(F(2π) * dot(q, ex_winding[e])) * ex_mats[e]
+        end
+    end
+    Ã[cell, i, j, b] = v
+end
+
 # H += T† Ã(q) T, the Ewald pair term of each wavevector b, mirroring
 # `Sunny.accum_ewald!` for the data of `ewald_device`. Here Ã[cell, a, b′, b] is
 # `Sunny.ewald_interaction_tensor` at q, with its cells in linear order. A

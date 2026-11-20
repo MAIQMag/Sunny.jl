@@ -148,8 +148,7 @@ The default is `:host` for `KernelAbstractions.CPU()`. Otherwise it is
 `:vendor` if available, except `:jacobi` on Metal for at most 2 bands, else
 `:jacobi` for at most 4 bands and `:host` beyond.
 
-Dipole-dipole interactions are supported. Their Ewald tensor is evaluated on
-the host, per wavevector, and its contraction into the Hamiltonian on device.
+Dipole-dipole interactions are supported, with their Ewald sums on device.
 
 The measure's combiner is evaluated on device if it is `isbits` and compiles
 for the backend. Otherwise, its forms (see `Sunny.measure_forms`) are evaluated
@@ -195,11 +194,31 @@ function Sunny.to_device(swt::Sunny.SpinWaveTheory; backend=KA.CPU(), eigensolve
     return SpinWaveTheoryDevice{F}(swt, backend, eigensolver, measure_mode, data)
 end
 
+# The parameters of `Sunny.EwaldTensorCache` in precision F, for the kernel
+# `ewald_tensor!`
+struct EwaldTensorDevice{F}
+    dims        :: NTuple{3, Int32}
+    recipvecs   :: Sunny.SMatrix{3, 3, F, 9}  # Of the supercell
+    mmax        :: NTuple{3, Int32}
+    kmax²       :: F
+    σ²          :: F
+    invV        :: F
+    μ0_μB²      :: F
+    demag_V     :: Sunny.SMatrix{3, 3, F, 9}
+    self_energy :: Sunny.SMatrix{3, 3, F, 9}
+end
+
 # The Ewald pair term of `Sunny.QuadraticEwald` on `backend`, or `nothing`
-# without dipole-dipole interactions. The entries of T are given twice: per bare
-# site j, as in `E.ptr`, and per Nambu label r, so that the thread of row r of H
-# gathers its entries without races. The entries of each label are ordered by
-# site, so that each entry of H sums in the order of `Sunny.accum_ewald!`.
+# without dipole-dipole interactions.
+#
+# The entries of T are given twice: per bare site j, as in `E.ptr`, and per
+# Nambu label r, so that the thread of row r of H gathers its entries without
+# races. The entries of each label are ordered by site, so that each entry of H
+# sums in the order of `Sunny.accum_ewald!`.
+#
+# The Ewald tensor follows `Sunny.ewald_interaction_tensor`. The real-space
+# terms of each linear index of [cell, i, j] are in CSR form, as are the
+# excluded couplings, which are few.
 ewald_device(_, _, ::Nothing, _) = nothing
 function ewald_device(backend, F, E::Sunny.QuadraticEwald, n)
     (; cache, ptr, labels, coefs, atoms, cells) = E
@@ -209,12 +228,22 @@ function ewald_device(backend, F, E::Sunny.QuadraticEwald, n)
     end
     es = reduce(vcat, by_label)
     site_of = [i for i in eachindex(cells) for _ in ptr[i]:ptr[i+1]-1]
-    na = Sunny.natoms(cache.cryst)
+
+    (; dims, cryst, μ0_μB², demag, σ², mmax, kmax², real_terms, excluded) = cache
+    na = Sunny.natoms(cryst)
+    ncells = prod(dims)
+    V = abs(det(cryst.latvecs)) * ncells
+    params = EwaldTensorDevice{F}(Int32.(dims), cryst.recipvecs / diagm(Vec3(dims)), Int32.(mmax), kmax², σ², 1/V,
+                                  μ0_μB², demag / V, -Sunny.Mat3(I) / (3(2π)^(3/2) * σ²^(3/2)))
+    terms = vec(real_terms)
+    LI = LinearIndices((ncells, na, na))
+    LC = LinearIndices(dims)
+    ex_index = Int32[LI[LC[(mod.(bond.n, dims) .+ 1)...], bond.i, bond.j] for (; bond) in excluded]
+
     return (;
-        cache,
-        ncells     = prod(cache.dims),
+        ncells,
         na,
-        dims       = Int32.(cache.dims),
+        dims       = Int32.(dims),
         ptr        = to_backend(backend, ptr),
         labels     = to_backend(backend, labels),
         coefs      = to_backend(backend, F, coefs),
@@ -223,7 +252,24 @@ function ewald_device(backend, F, E::Sunny.QuadraticEwald, n)
         label_coef = to_backend(backend, F, coefs[es]),
         atoms      = to_backend(backend, Int32.(atoms)),
         cells      = to_backend(backend, [Int32.(c) for c in cells]),
+        params,
+        positions   = to_backend(backend, F, cryst.positions),
+        real_ptr    = to_backend(backend, Int32[1; 1 .+ cumsum(length.(terms))]),
+        real_shifts = to_backend(backend, F, [Vec3(n) for t in terms for (n, _) in t]),
+        real_mats   = to_backend(backend, F, [A for t in terms for (_, A) in t]),
+        ex_index    = to_backend(backend, ex_index),
+        ex_winding  = to_backend(backend, F, [Vec3(fld.(bond.n, dims)) for (; bond) in excluded]),
+        ex_mats     = to_backend(backend, F, [A_loc for (; A_loc) in excluded]),
     )
+end
+
+# The wavevector `q_supercell` as `Sunny.ewald_interaction_tensor` takes it:
+# rounded to an integer within round-off, then its offset q0 from the nearest
+# integer, and whether q0 vanishes, so that the k = 0 mode is singular
+function ewald_wavevector(q_supercell)
+    q = map(x -> Sunny.is_integer(x; tol=1e-12) ? round(x) : x, Vec3(q_supercell))
+    q0 = q - round.(q)
+    return (q, q0, norm(q0) < 1e-16)
 end
 
 # The shift of the diagonal of the Hamiltonian in precision F. Rounding H to F

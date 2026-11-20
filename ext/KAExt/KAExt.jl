@@ -1,7 +1,7 @@
 module KAExt
 
 using KernelAbstractions: KernelAbstractions as KA, @Const, @index, @kernel
-using LinearAlgebra: dot, mul!, norm
+using LinearAlgebra: I, det, diagm, dot, mul!, norm
 using PrecompileTools: @compile_workload, @setup_workload
 using Sunny: Sunny, Vec3
 

@@ -96,8 +96,7 @@ function susceptibility_poles_device(swt_d::SpinWaveTheoryDevice, qpts; batch_si
     u = KA.allocate(backend, Complex{F}, (n, Nobs, batch_size))
     A = KA.allocate(backend, Complex{F}, (Nobs, n, batch_size))
     if !isnothing(ewald)
-        Ã_h = zeros(Sunny.SMatrix{3, 3, Complex{F}, 9}, ewald.ncells, ewald.na, ewald.na, batch_size)
-        Ã = KA.allocate(backend, eltype(Ã_h), size(Ã_h))
+        Ã = KA.allocate(backend, Sunny.SMatrix{3, 3, Complex{F}, 9}, (ewald.ncells, ewald.na, ewald.na, batch_size))
     end
     (; measure_mode) = swt_d
     if measure_mode == :forms
@@ -128,12 +127,12 @@ function susceptibility_poles_device(swt_d::SpinWaveTheoryDevice, qpts; batch_si
         build_hamiltonian!(backend)(H, data.rowptr, data.cols, data.offset_index, data.vals, data.offsets,
                                     qs_supercell_d, data.regularization; ndrange=(n, nb))
         if !isnothing(ewald)
-            # The Ewald tensor on the host, as in `Sunny.accum_ewald!`
-            Sunny.foreach_chunked(Returns(nothing), 1:nb; threaded) do _, b
-                A_b = Sunny.ewald_interaction_tensor(ewald.cache, Vec3(qs_supercell[b]))
-                view(Ã_h, :, :, :, b) .= with_precision.(F, reshape(A_b, size(Ã_h)[1:3]))
-            end
-            copyto!(Ã, Ã_h)
+            # The Ewald tensor at each wavevector, as `Sunny.accum_ewald!` takes it
+            ewald_qs = ewald_wavevector.(qs_supercell)
+            ewald_tensor!(backend)(Ã, ewald.params, ewald.positions, ewald.real_ptr, ewald.real_shifts, ewald.real_mats,
+                                   ewald.ex_index, ewald.ex_winding, ewald.ex_mats, to_backend(backend, F, first.(ewald_qs)),
+                                   to_backend(backend, F, getindex.(ewald_qs, 2)), to_backend(backend, last.(ewald_qs));
+                                   ndrange=(ewald.ncells, ewald.na, ewald.na, nb))
             accum_ewald!(backend)(H, Ã, ewald.label_ptr, ewald.label_site, ewald.label_coef, ewald.ptr, ewald.labels,
                                   ewald.coefs, ewald.atoms, ewald.cells, qs_supercell_d, ewald.dims; ndrange=(n, nb))
             hermitianize!(backend)(H; ndrange=(n, n, nb))
