@@ -34,13 +34,16 @@ end
 
     acc = zero(Sunny.SMatrix{3, 3, Complex{F}, 9})
     for m1 in -mmax[1]:mmax[1], m2 in -mmax[2]:mmax[2], m3 in -mmax[3]:mmax[3]
-        q0_zero && m1 == m2 == m3 == 0 && continue  # The `demag` term instead
-        mq = Sunny.SVector{3, F}(m1, m2, m3) + q0
-        k = recipvecs * mq
-        k² = dot(k, k)
-        k² <= kmax² || continue
-        Aₖ = (invV * exp(-σ² * k² / 2) / k²) * (k * k')
-        acc += cis(-F(2π) * dot(mq, x)) * Aₖ
+        # The k = 0 mode is the `demag` term instead
+        if !(q0_zero && m1 == 0 && m2 == 0 && m3 == 0)
+            mq = Sunny.SVector{3, F}(m1, m2, m3) + q0
+            k = recipvecs * mq
+            k² = dot(k, k)
+            if k² <= kmax²
+                Aₖ = (invV * exp(-σ² * k² / 2) / k²) * (k * k')
+                acc += cis(-F(2π) * dot(mq, x)) * Aₖ
+            end
+        end
     end
 
     q0_zero && (acc += p.demag_V)
@@ -55,7 +58,8 @@ end
 # The Ewald tensor Ã[cell, i, j, b] of each wavevector b, mirroring
 # `Sunny.ewald_interaction_tensor`, with its cells in linear order. As on the
 # host, the zero-offset cell is completed by Hermiticity, then the excluded
-# couplings are removed.
+# couplings are removed. A single call of `ewald_entry`, which is inlined,
+# keeps the kernel small: a call per branch tripled the compile time on POCL.
 @kernel function ewald_tensor!(Ã, p, @Const(positions), @Const(real_ptr), @Const(real_shifts), @Const(real_mats),
                                @Const(ex_index), @Const(ex_winding), @Const(ex_mats), @Const(qs), @Const(q0s), @Const(q0_zeros))
     cell, i, j, b = @index(Global, NTuple)
@@ -65,11 +69,10 @@ end
     q = qs[b]
     q0 = q0s[b]
     q0_zero = q0_zeros[b]
-    v = if cell == 1 && i > j
-        ewald_entry(p, positions, real_ptr, real_shifts, real_mats, q, q0, q0_zero, ncells, na, cell, j, i)'
-    else
-        ewald_entry(p, positions, real_ptr, real_shifts, real_mats, q, q0, q0_zero, ncells, na, cell, i, j)
-    end
+    flip = cell == 1 && i > j
+    (i′, j′) = flip ? (j, i) : (i, j)
+    v = ewald_entry(p, positions, real_ptr, real_shifts, real_mats, q, q0, q0_zero, ncells, na, cell, i′, j′)
+    flip && (v = v')
     idx = cell + ncells * ((i - 1) + na * (j - 1))
     for e in eachindex(ex_index)
         if ex_index[e] == idx
