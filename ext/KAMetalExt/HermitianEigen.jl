@@ -268,10 +268,33 @@ group_count(NP) = clamp(16384 ÷ group_bytes(NP), 1, 8)
             Metal.MtlThreadGroupArray(ComplexF32, (NP, G)))
 end
 
+# A column of the matrix in registers. Lane ℓ owns rows ℓ + 32(s - 1) for the
+# slots s = 1, …, NS, where n ≤ 32 NS, and holds them in an NTuple, indexed only
+# by constants so that it may stay in registers. Slots beyond n hold zeros.
+#
+# Tuples that a loop reassigns pass to closures as arguments, e.g. of `map`,
+# never by capture. A captured variable that is reassigned is boxed, and its
+# dynamic calls fail to compile, or crash LLVM.
+@inline slot_row(lane, s) = lane + SIMD_WIDTH * (s - 1)
+@inline slots(f, lane, ::Val{NS}) where NS = ntuple(s -> f(slot_row(lane, s)), Val(NS))
+@inline slot_dot(x, y) = sum(ntuple(s -> x[s] * y[s], Val(length(x))))
+
+# Stores the column x into column c of M[:, :, b]
+@inline function store_slots!(M, x, c, b, lane)
+    n = size(M, 1)
+    ntuple(Val(length(x))) do s
+        r = slot_row(lane, s)
+        r <= n && (M[r, c, b] = x[s])
+        nothing
+    end
+    return
+end
+
 # As `eigen_tile!`, for the matrix b of a SIMD group with slice g of the
 # workspace `ws = (d, e, τ, v, z)`, and Z[:, :, b] for the real eigenvectors of
-# the tridiagonal. Called by every lane of the SIMD group.
-@inline function eigen_group!(λ, Y, A, Z, b, ws, g)
+# the tridiagonal, with NS rows per lane. Called by every lane of the SIMD
+# group.
+@inline function eigen_group!(λ, Y, A, Z, b, ws, g, ::Val{NS}) where NS
     (td, te, tτ, tv, tz) = ws
     n = size(A, 1)
     lane = Int(thread_index_in_simdgroup())
@@ -468,22 +491,30 @@ end
             end
         end
 
-        # Y ← Hₖ Z for k = n-1, …, 1, by columns
-        for i in rows, j in 1:n
-            Y[i, j, b] = Z[i, j, b]
-        end
-        group_sync()
-        for j in rows
+        # Y ← Hₖ Z for k = n-1, …, 1, two columns at a time in registers, with
+        # lanes down the columns, so that the loads of each reflector are
+        # contiguous, and its products with the columns are summed across the
+        # SIMD group. Lanes own the rows of Z that they rotated and sorted. For
+        # the Bogoliubov kernel with n = 128 on an Apple M5 Pro, this phase
+        # took about 48 ms rather than 62 ms per 2000 matrices with a lane per
+        # column, and the kernel 394 ms rather than 408 ms.
+        zc = zero(ComplexF32)
+        for j in 1:2:n
+            j2 = min(j + 1, n)
+            y1 = slots(r -> r <= n ? ComplexF32(Z[r, j, b]) : zc, lane, Val(NS))
+            y2 = slots(r -> r <= n ? ComplexF32(Z[r, j2, b]) : zc, lane, Val(NS))
             for k in n-1:-1:1
-                x = zero(ComplexF32)
-                for i in k+1:n
-                    x += conj(A[i, k, b]) * Y[i, j, b]
-                end
-                x *= tτ[k, g]
-                for i in k+1:n
-                    Y[i, j, b] -= A[i, k, b] * x
-                end
+                v = slots(r -> k < r <= n ? A[r, k, b] : zc, lane, Val(NS))
+                vc = map(conj, v)
+                (u1, u2) = tile_sum2(slot_dot(vc, y1), slot_dot(vc, y2), Val(SIMD_WIDTH))
+                τ = tτ[k, g]
+                x1 = u1 * τ
+                x2 = u2 * τ
+                y1 = map((y, v) -> y - v * x1, y1, v)
+                y2 = map((y, v) -> y - v * x2, y2, v)
             end
+            store_slots!(Y, y1, j, b, lane)
+            j2 > j && store_slots!(Y, y2, j2, b, lane)
         end
         for i in rows
             λ[i, b] = td[i, g]
@@ -498,7 +529,7 @@ function hermitian_eigen_group_kernel!(λ, Y, A, Z, status, ::Val{NP}, ::Val{G})
     ws = group_workspace(Val(NP), Val(G))
     b > size(A, 3) && return
     g = Int(Metal.simdgroup_index_in_threadgroup())
-    converged = eigen_group!(λ, Y, A, Z, b, ws, g)
+    converged = eigen_group!(λ, Y, A, Z, b, ws, g, Val(NP ÷ SIMD_WIDTH))
     thread_index_in_simdgroup() == 1 && (status[b] = converged ? STATUS_OK : STATUS_NOCONVERGE)
     return
 end

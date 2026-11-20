@@ -189,6 +189,13 @@ end
 # ℓ owns rows or columns ℓ, ℓ+32, …. Its control flow is uniform over the SIMD
 # group, so barriers may appear anywhere, and the pivots of Cholesky are
 # computed redundantly by every lane from rows in device memory.
+#
+# The triangular solves stay by columns, with a lane per column, although its
+# loads are strided across lanes. With lanes down the columns instead, and two
+# columns in registers, as in the back-transformation of `eigen_group!`, each
+# step of a solve needs a broadcast or a sum across the SIMD group. For n = 128
+# on an Apple M5 Pro, B = K⁻¹ Ĩ was then no faster, A = K⁻¹ B† was 1.3× slower,
+# and t = K⁻† y with its Rayleigh quotients 2.3× slower.
 function bogoliubov_group_kernel!(T, E, H, A, Z, D, status, nb, ::Val{NP}, ::Val{G}) where {NP, G}
     n = size(H, 1)
     L = n ÷ 2
@@ -273,7 +280,7 @@ function bogoliubov_group_kernel!(T, E, H, A, Z, D, status, nb, ::Val{NP}, ::Val
         end
         group_sync()
 
-        eigen_group!(E, T, A, Z, b, ws, g) || (st = STATUS_NOCONVERGE)
+        eigen_group!(E, T, A, Z, b, ws, g, Val(NP ÷ SIMD_WIDTH)) || (st = STATUS_NOCONVERGE)
     end
 
     # t = K⁻† y in T, by columns
