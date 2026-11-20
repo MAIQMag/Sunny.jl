@@ -240,6 +240,51 @@ end
     test_device_intensities(swt, backend; broadenings=[(; η=0.1, kernel=nothing, kT=0)])
 end
 
+@testitem "KAExt dipole-dipole" setup=[KAModels] begin
+    using .KAModels: test_device_intensities
+    using LinearAlgebra: I
+    import KernelAbstractions: CPU
+    backend = CPU()
+    b = [(; η=0.1, kernel=gaussian(fwhm=1.0), kT=0.3)]
+
+    # A triclinic cell with two atoms, an anisotropic g-tensor, and a supercell,
+    # so that the Ewald tensor couples cells with windings
+    for mode in (:dipole, :SUN)
+        latvecs = lattice_vectors(1.1, 0.9, 0.8, 92, 85, 95)
+        cryst = Crystal(latvecs, [[0, 0, 0], [0.3, 0.1, 0.2]], 1)
+        g = [2 0.1 0; 0.1 1.8 0; 0 0 2.2]
+        sys = System(cryst, [1 => Moment(s=3/2, g=2), 2 => Moment(s=3/2; g)], mode; dims=(3, 2, 1))
+        set_exchange!(sys, 0.3, Bond(1, 2, [0, 0, 0]))
+        set_onsite_coupling!(sys, S -> 0.2*S[3]^2, 1)
+        set_field!(sys, [0.5, 0.2, 2])
+        enable_dipole_dipole!(sys, 0.2; demag=Sunny.Mat3(I/3))
+        polarize_spins!(sys, [0, 0, 1])
+        minimize_energy!(sys; maxiters=10_000)
+        swt = SpinWaveTheory(sys; measure=ssf_perp(sys))
+        for precision in (Float64, Float32), eigensolver in (:host, :jacobi)
+            test_device_intensities(swt, backend; precision, eigensolver, energies=range(-2, 20, 25), broadenings=b)
+        end
+    end
+
+    # Entangled dimers, whose intra-unit dipole-dipole coupling is excluded from
+    # the Ewald tensor
+    units = Units(:meV, :angstrom)
+    box = Crystal([5.0 0 0; 0 5 0; 0 0 6], [[0, 0, 0], [0, 0.2, 0]], 1; types=["A", "B"])
+    sys = System(box, [1 => Moment(s=1/2, g=2), 2 => Moment(s=1/2, g=2)], :SUN; seed=0)
+    set_exchange!(sys, 1.0, Bond(1, 2, [0, 0, 0]))
+    set_exchange!(sys, 0.2, Bond(1, 1, [1, 0, 0]))
+    set_exchange!(sys, 0.2, Bond(2, 2, [1, 0, 0]))
+    set_field!(sys, [0, 0, -3])
+    enable_dipole_dipole!(sys, units.vacuum_permeability; demag=Sunny.Mat3(I/3))
+    esys = entangle_system(sys, [[1, 2]])
+    randomize_spins!(esys)
+    minimize_energy!(esys)
+    swt = SpinWaveTheory(esys; measure=ssf_perp(esys))
+    for precision in (Float64, Float32)
+        test_device_intensities(swt, backend; precision, energies=range(0, 15, 25), broadenings=b)
+    end
+end
+
 @testitem "KAExt errors" setup=[KAModels] begin
     using .KAModels: fcc_afm, unstable_chain, test_device_instability
     import KernelAbstractions: CPU
@@ -258,9 +303,6 @@ end
     sys = fcc_afm(:dipole)
     swt_d = to_device(SpinWaveTheory(sys; measure=nothing))
     @test_throws "No observables!" intensities(swt_d, [[0, 0, 0]]; energies=[1.0], η=0.1)
-
-    enable_dipole_dipole!(sys, 1.0)
-    @test_throws "Dipole-dipole interactions are not yet supported" to_device(SpinWaveTheory(sys; measure=ssf_trace(sys)))
 end
 
 # The steps shared by vendor eigensolvers, applied to the solution of LAPACK on

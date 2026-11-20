@@ -1,7 +1,7 @@
 # The Hamiltonian matrix H(q) of each wavevector b, mirroring
-# `Sunny.hamiltonian_matrix!` without the Ewald term. A thread owns row r, and
-# sums its entries in the order of `Sunny.accum_table!`, so that H is exactly
-# Hermitian.
+# `Sunny.hamiltonian_matrix!` without the Ewald term, which `accum_ewald!` adds.
+# A thread owns row r, and sums its entries in the order of `Sunny.accum_table!`,
+# so that H is exactly Hermitian.
 @kernel function build_hamiltonian!(H, @Const(rowptr), @Const(cols), @Const(offset_index), @Const(vals),
                                     @Const(offsets), @Const(qs_supercell), regularization)
     r, b = @index(Global, NTuple)
@@ -16,6 +16,46 @@
         H[r, c, b] += r == c ? real(v) : v
     end
     H[r, r, b] += regularization
+end
+
+# H += T† Ã(q) T, the Ewald pair term of each wavevector b, mirroring
+# `Sunny.accum_ewald!` for the data of `ewald_device`. Here Ã[cell, a, b′, b] is
+# `Sunny.ewald_interaction_tensor` at q, with its cells in linear order. A
+# thread owns row r, and sums its entries in the order of the host. The rows
+# of H are then Hermitian only up to round-off, which `hermitianize!` removes.
+@kernel function accum_ewald!(H, @Const(Ã), @Const(label_ptr), @Const(label_site), @Const(label_coef), @Const(ptr),
+                              @Const(labels), @Const(coefs), @Const(atoms), @Const(cells), @Const(qs_supercell), dims)
+    r, b = @index(Global, NTuple)
+    F = real(eltype(H))
+    q = qs_supercell[b]
+    for e in label_ptr[r]:label_ptr[r+1]-1
+        i = label_site[e]
+        ce = label_coef[e]
+        for j in eachindex(atoms)
+            # The cell displacement wraps into the supercell with a winding w,
+            # as in `Sunny.ewald_tensor_at`
+            Δ = cells[j] .- cells[i]
+            c = mod.(Δ, dims)
+            cell = 1 + c[1] + dims[1] * (c[2] + dims[2] * c[3])
+            w = Sunny.SVector{3, F}(fld.(Δ, dims))
+            Aij = cis(-F(2π) * dot(q, w)) * Ã[cell, atoms[i], atoms[j], b]
+            for f in ptr[j]:ptr[j+1]-1
+                H[r, labels[f], b] += dot(ce, Aij * coefs[f])
+            end
+        end
+    end
+end
+
+# H = (H + H†)/2 for each wavevector b, as `LinearAlgebra.hermitianpart!`
+@kernel function hermitianize!(H)
+    r, c, b = @index(Global, NTuple)
+    if r == c
+        H[r, r, b] = real(H[r, r, b])
+    elseif r < c
+        v = (H[r, c, b] + conj(H[c, r, b])) / 2
+        H[r, c, b] = v
+        H[c, r, b] = conj(v)
+    end
 end
 
 # The observables in the Nambu basis, mirroring `Sunny.accum_observable_vectors!`.

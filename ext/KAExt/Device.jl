@@ -148,6 +148,9 @@ The default is `:host` for `KernelAbstractions.CPU()`. Otherwise it is
 `:vendor` if available, except `:jacobi` on Metal for at most 2 bands, else
 `:jacobi` for at most 4 bands and `:host` beyond.
 
+Dipole-dipole interactions are supported. Their Ewald tensor is evaluated on
+the host, per wavevector, and its contraction into the Hamiltonian on device.
+
 The measure's combiner is evaluated on device if it is `isbits` and compiles
 for the backend. Otherwise, its forms (see `Sunny.measure_forms`) are evaluated
 on the host, once if they are independent of the wavevector, and otherwise per
@@ -155,7 +158,6 @@ wavevector.
 """
 function Sunny.to_device(swt::Sunny.SpinWaveTheory; backend=KA.CPU(), eigensolver=nothing,
                          precision::Type=Sunny.device_precision(backend))
-    isnothing(swt.ewald) || error("Dipole-dipole interactions are not yet supported on device")
     F = precision
     F in (Float32, Float64) || error("Unsupported precision $F; use Float64 or Float32")
 
@@ -187,9 +189,41 @@ function Sunny.to_device(swt::Sunny.SpinWaveTheory; backend=KA.CPU(), eigensolve
         positions    = to_backend(backend, F, positions),
         formfactors  = to_backend(backend, formfactors),
         regularization = device_regularization(swt, F),
+        ewald        = ewald_device(backend, F, swt.ewald, 2Sunny.nbands(swt)),
     )
     eigensolver = resolve_eigensolver(backend, eigensolver, 2Sunny.nbands(swt), F)
     return SpinWaveTheoryDevice{F}(swt, backend, eigensolver, measure_mode, data)
+end
+
+# The Ewald pair term of `Sunny.QuadraticEwald` on `backend`, or `nothing`
+# without dipole-dipole interactions. The entries of T are given twice: per bare
+# site j, as in `E.ptr`, and per Nambu label r, so that the thread of row r of H
+# gathers its entries without races. The entries of each label are ordered by
+# site, so that each entry of H sums in the order of `Sunny.accum_ewald!`.
+ewald_device(_, _, ::Nothing, _) = nothing
+function ewald_device(backend, F, E::Sunny.QuadraticEwald, n)
+    (; cache, ptr, labels, coefs, atoms, cells) = E
+    by_label = [Int[] for _ in 1:n]
+    for i in eachindex(cells), e in ptr[i]:ptr[i+1]-1
+        push!(by_label[labels[e]], e)
+    end
+    es = reduce(vcat, by_label)
+    site_of = [i for i in eachindex(cells) for _ in ptr[i]:ptr[i+1]-1]
+    na = Sunny.natoms(cache.cryst)
+    return (;
+        cache,
+        ncells     = prod(cache.dims),
+        na,
+        dims       = Int32.(cache.dims),
+        ptr        = to_backend(backend, ptr),
+        labels     = to_backend(backend, labels),
+        coefs      = to_backend(backend, F, coefs),
+        label_ptr  = to_backend(backend, Int32[1; 1 .+ cumsum(length.(by_label))]),
+        label_site = to_backend(backend, Int32.(site_of[es])),
+        label_coef = to_backend(backend, F, coefs[es]),
+        atoms      = to_backend(backend, Int32.(atoms)),
+        cells      = to_backend(backend, [Int32.(c) for c in cells]),
+    )
 end
 
 # The shift of the diagonal of the Hamiltonian in precision F. Rounding H to F

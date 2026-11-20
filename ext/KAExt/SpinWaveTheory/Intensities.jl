@@ -82,8 +82,10 @@ function susceptibility_poles_device(swt_d::SpinWaveTheoryDevice, qpts; batch_si
     K = Sunny.num_real_components(eltype(measure))
 
     # Up to three complex n×n matrices per wavevector (H, T, and the scratch of
-    # the Jacobi eigensolver) dominate memory
-    bytes_per_q = 2sizeof(F) * (3n^2 + 2n*Nobs + Nobs^2*K) + sizeof(F)*n*(1 + K)
+    # the Jacobi eigensolver) dominate memory, unless the Ewald tensor does
+    ewald = data.ewald
+    nÃ = isnothing(ewald) ? 0 : 9 * ewald.ncells * ewald.na^2
+    bytes_per_q = 2sizeof(F) * (3n^2 + 2n*Nobs + Nobs^2*K + nÃ) + sizeof(F)*n*(1 + K)
     batch_size = clamp(something(batch_size, budget ÷ bytes_per_q), 1, max(Nq, 1))
 
     disp = KA.allocate(backend, F, (n, Nq))
@@ -93,6 +95,10 @@ function susceptibility_poles_device(swt_d::SpinWaveTheoryDevice, qpts; batch_si
     E = KA.allocate(backend, F, (n, batch_size))
     u = KA.allocate(backend, Complex{F}, (n, Nobs, batch_size))
     A = KA.allocate(backend, Complex{F}, (Nobs, n, batch_size))
+    if !isnothing(ewald)
+        Ã_h = zeros(Sunny.SMatrix{3, 3, Complex{F}, 9}, ewald.ncells, ewald.na, ewald.na, batch_size)
+        Ã = KA.allocate(backend, eltype(Ã_h), size(Ã_h))
+    end
     (; measure_mode) = swt_d
     if measure_mode == :forms
         M_h = zeros(Complex{F}, Nobs, Nobs, K, batch_size)
@@ -121,6 +127,17 @@ function susceptibility_poles_device(swt_d::SpinWaveTheoryDevice, qpts; batch_si
 
         build_hamiltonian!(backend)(H, data.rowptr, data.cols, data.offset_index, data.vals, data.offsets,
                                     qs_supercell_d, data.regularization; ndrange=(n, nb))
+        if !isnothing(ewald)
+            # The Ewald tensor on the host, as in `Sunny.accum_ewald!`
+            Sunny.foreach_chunked(Returns(nothing), 1:nb; threaded) do _, b
+                A_b = Sunny.ewald_interaction_tensor(ewald.cache, Vec3(qs_supercell[b]))
+                view(Ã_h, :, :, :, b) .= with_precision.(F, reshape(A_b, size(Ã_h)[1:3]))
+            end
+            copyto!(Ã, Ã_h)
+            accum_ewald!(backend)(H, Ã, ewald.label_ptr, ewald.label_site, ewald.label_coef, ewald.ptr, ewald.labels,
+                                  ewald.coefs, ewald.atoms, ewald.cells, qs_supercell_d, ewald.dims; ndrange=(n, nb))
+            hermitianize!(backend)(H; ndrange=(n, n, nb))
+        end
         KA.synchronize(backend)
         bogoliubov_batched!(T, E, H, nb, swt_d, qs_supercell; threaded)
 
