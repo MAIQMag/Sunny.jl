@@ -67,6 +67,12 @@ function compute_form_factor(ff::FormFactorDevice{F}, q2_absolute) where F
     return J0 + j2_weight * compute_gaussian_expansion(j2, s2) * s2
 end
 
+# The fields of the struct x, each adapted by `to`. A device struct S{F, ...}
+# defines a constructor S{F}(fields...) that infers the other type parameters,
+# so that `Adapt.adapt_structure(to, x::S{F})` is S{F}(adapt_fields(to, x)...),
+# e.g. with the device arrays of a kernel argument in place of its arrays.
+adapt_fields(to, x) = ntuple(i -> adapt(to, getfield(x, i)), Val(fieldcount(typeof(x))))
+
 # Mirrors `Sunny.QuadraticTable` on a device, in precision F
 struct QuadraticTableDevice{F, VO, VI, VV}
     offsets      :: VO
@@ -76,12 +82,15 @@ struct QuadraticTableDevice{F, VO, VI, VV}
     vals         :: VV
 end
 
+QuadraticTableDevice{F}(offsets::VO, rowptr::VI, cols::VI, offset_index::VI, vals::VV) where {F, VO, VI, VV} =
+    QuadraticTableDevice{F, VO, VI, VV}(offsets, rowptr, cols, offset_index, vals)
+
+Adapt.adapt_structure(to, t::QuadraticTableDevice{F}) where F = QuadraticTableDevice{F}(adapt_fields(to, t)...)
+
 function QuadraticTableDevice{F}(backend, t::Sunny.QuadraticTable) where F
     (; offsets, rowptr, cols, offset_index, vals) = t
-    offsets = to_backend(backend, F, offsets)
-    vals = to_backend(backend, F, vals)
-    (rowptr, cols, offset_index) = to_backend.(Ref(backend), (rowptr, cols, offset_index))
-    return QuadraticTableDevice{F, typeof(offsets), typeof(rowptr), typeof(vals)}(offsets, rowptr, cols, offset_index, vals)
+    return QuadraticTableDevice{F}(to_backend(backend, F, offsets), to_backend(backend, rowptr), to_backend(backend, cols),
+                                   to_backend(backend, offset_index), to_backend(backend, F, vals))
 end
 
 # The data of `Sunny.MeasureSpec` that the residues need on a device, in
@@ -96,6 +105,11 @@ struct MeasureSpecDevice{F, C, M, VP, VF}
     formfactors :: VF # [observable, site, part]
 end
 
+MeasureSpecDevice{F}(corr_pairs::C, forms::M, positions::VP, formfactors::VF) where {F, C, M, VP, VF} =
+    MeasureSpecDevice{F, C, M, VP, VF}(corr_pairs, forms, positions, formfactors)
+
+Adapt.adapt_structure(to, m::MeasureSpecDevice{F}) where F = MeasureSpecDevice{F}(adapt_fields(to, m)...)
+
 function MeasureSpecDevice{F}(backend, measure::Sunny.MeasureSpec, sys::Sunny.System, forms) where F
     Na = Sunny.nsites(sys)
     Nparts = Sunny.num_parts_per_unit(measure)
@@ -105,10 +119,7 @@ function MeasureSpecDevice{F}(backend, measure::Sunny.MeasureSpec, sys::Sunny.Sy
     formfactors = [FormFactorDevice{F}(measure.formfactors[μ, Sunny.to_atom(sites[i]), p])
                    for μ in 1:Sunny.num_observables(measure), i in 1:Na, p in 1:Nparts]
     corr_pairs = Sunny.SVector{length(measure.corr_pairs)}(measure.corr_pairs)
-    positions = to_backend(backend, F, positions)
-    formfactors = to_backend(backend, formfactors)
-    return MeasureSpecDevice{F, typeof(corr_pairs), typeof(forms), typeof(positions), typeof(formfactors)}(
-        corr_pairs, forms, positions, formfactors)
+    return MeasureSpecDevice{F}(corr_pairs, forms, to_backend(backend, F, positions), to_backend(backend, formfactors))
 end
 
 # Mirrors `Sunny.SpinWaveTheory` on `backend`, with floating point numbers in
@@ -223,8 +234,7 @@ function Sunny.to_device(swt::Sunny.SpinWaveTheory; backend=KA.CPU(), eigensolve
                                    MeasureSpecDevice{F}(backend, measure, sys, forms))
 end
 
-# The constants of `Sunny.ewald_interaction_tensor` in precision F, isbits so
-# that the kernel `ewald_tensor!` takes them as one argument
+# The constants of `Sunny.ewald_interaction_tensor` in precision F
 struct EwaldTensorParams{F}
     dims        :: NTuple{3, Int32}
     recipvecs   :: Sunny.SMatrix{3, 3, F, 9}  # Of the supercell
@@ -254,6 +264,13 @@ struct EwaldTensorCacheDevice{F, VI, V3, VM}
     ex_mats     :: VM
 end
 
+EwaldTensorCacheDevice{F}(dims, na, params, positions::V3, real_ptr::VI, real_shifts::V3, real_mats::VM, ex_index::VI,
+                          ex_winding::V3, ex_mats::VM) where {F, VI, V3, VM} =
+    EwaldTensorCacheDevice{F, VI, V3, VM}(dims, na, params, positions, real_ptr, real_shifts, real_mats, ex_index,
+                                          ex_winding, ex_mats)
+
+Adapt.adapt_structure(to, c::EwaldTensorCacheDevice{F}) where F = EwaldTensorCacheDevice{F}(adapt_fields(to, c)...)
+
 function EwaldTensorCacheDevice{F}(backend, cache::Sunny.EwaldTensorCache) where F
     (; dims, cryst, μ0_μB², demag, σ², mmax, kmax², real_terms, excluded) = cache
     na = Sunny.natoms(cryst)
@@ -263,13 +280,12 @@ function EwaldTensorCacheDevice{F}(backend, cache::Sunny.EwaldTensorCache) where
     terms = vec(real_terms)
     LI = LinearIndices((prod(dims), na, na))
     LC = LinearIndices(dims)
-    positions = to_backend(backend, F, cryst.positions)
-    real_ptr = to_backend(backend, Int32[1; 1 .+ cumsum(length.(terms))])
-    real_mats = to_backend(backend, F, [A for t in terms for (_, A) in t])
-    return EwaldTensorCacheDevice{F, typeof(real_ptr), typeof(positions), typeof(real_mats)}(
-        Int32.(dims), na, params, positions, real_ptr,
+    return EwaldTensorCacheDevice{F}(
+        Int32.(dims), na, params,
+        to_backend(backend, F, cryst.positions),
+        to_backend(backend, Int32[1; 1 .+ cumsum(length.(terms))]),
         to_backend(backend, F, [Vec3(n) for t in terms for (n, _) in t]),
-        real_mats,
+        to_backend(backend, F, [A for t in terms for (_, A) in t]),
         to_backend(backend, Int32[LI[LC[(mod.(bond.n, dims) .+ 1)...], bond.i, bond.j] for (; bond) in excluded]),
         to_backend(backend, F, [Vec3(fld.(bond.n, dims)) for (; bond) in excluded]),
         to_backend(backend, F, [A_loc for (; A_loc) in excluded]),
@@ -296,6 +312,12 @@ struct QuadraticEwaldDevice{F, C <: EwaldTensorCacheDevice{F}, VI, VC, VN}
     label_coef :: VC
 end
 
+QuadraticEwaldDevice{F}(cache::C, ptr::VI, labels::VI, coefs::VC, atoms::VI, cells::VN, label_ptr::VI, label_site::VI,
+                        label_coef::VC) where {F, C, VI, VC, VN} =
+    QuadraticEwaldDevice{F, C, VI, VC, VN}(cache, ptr, labels, coefs, atoms, cells, label_ptr, label_site, label_coef)
+
+Adapt.adapt_structure(to, E::QuadraticEwaldDevice{F}) where F = QuadraticEwaldDevice{F}(adapt_fields(to, E)...)
+
 function QuadraticEwaldDevice{F}(backend, E::Sunny.QuadraticEwald, L) where F
     (; cache, ptr, labels, coefs, atoms, cells) = E
     by_label = [Int[] for _ in 1:2L]
@@ -305,12 +327,13 @@ function QuadraticEwaldDevice{F}(backend, E::Sunny.QuadraticEwald, L) where F
     es = reduce(vcat, by_label)
     site_of = [i for i in eachindex(cells) for _ in ptr[i]:ptr[i+1]-1]
 
-    cache = EwaldTensorCacheDevice{F}(backend, cache)
-    ptr = to_backend(backend, ptr)
-    coefs_d = to_backend(backend, F, coefs)
-    cells = to_backend(backend, [Int32.(c) for c in cells])
-    return QuadraticEwaldDevice{F, typeof(cache), typeof(ptr), typeof(coefs_d), typeof(cells)}(
-        cache, ptr, to_backend(backend, labels), coefs_d, to_backend(backend, Int32.(atoms)), cells,
+    return QuadraticEwaldDevice{F}(
+        EwaldTensorCacheDevice{F}(backend, cache),
+        to_backend(backend, ptr),
+        to_backend(backend, labels),
+        to_backend(backend, F, coefs),
+        to_backend(backend, Int32.(atoms)),
+        to_backend(backend, [Int32.(c) for c in cells]),
         to_backend(backend, Int32[1; 1 .+ cumsum(length.(by_label))]),
         to_backend(backend, Int32.(site_of[es])),
         to_backend(backend, F, coefs[es]),

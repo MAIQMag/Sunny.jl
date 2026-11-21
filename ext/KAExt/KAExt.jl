@@ -1,5 +1,6 @@
 module KAExt
 
+using Adapt: Adapt, adapt
 using KernelAbstractions: KernelAbstractions as KA, @Const, @index, @kernel
 using LinearAlgebra: I, det, diagm, dot, mul!, norm
 using PrecompileTools: @compile_workload, @setup_workload

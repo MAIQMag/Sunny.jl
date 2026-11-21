@@ -4,6 +4,7 @@ version = "0.10.0"
 authors = ["The Sunny team"]
 
 [deps]
+Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
 Brillouin = "23470ee3-d0df-4052-8b1a-8cbd6363e7f0"
 ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
 CrystalInfoFramework = "6007d9b0-c6b2-11e8-0510-1d10e825f3f1"
@@ -51,6 +52,7 @@ WGLMakiePrecompilesExt = ["Makie", "WGLMakie"]
 
 [compat]
 AMDGPU = "2"
+Adapt = "4"
 Brillouin = "0.5.19"
 CUDA = "6"
 ChainRulesCore = "1.26.0"

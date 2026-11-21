@@ -2,9 +2,9 @@
 # `Sunny.hamiltonian_matrix!` without the Ewald term, which `accum_ewald!` adds.
 # A thread owns row r, and sums its entries in the order of `Sunny.accum_table!`,
 # so that H is exactly Hermitian.
-@kernel function build_hamiltonian!(H, @Const(rowptr), @Const(cols), @Const(offset_index), @Const(vals),
-                                    @Const(offsets), @Const(qs_supercell), regularization)
+@kernel function build_hamiltonian!(H, table, @Const(qs_supercell), regularization)
     r, b = @index(Global, NTuple)
+    (; rowptr, cols, offset_index, vals, offsets) = table
     F = real(eltype(H))
     for c in axes(H, 2)
         H[r, c, b] = 0
@@ -23,9 +23,9 @@ end
 # `cell` the linear index of a cell of the supercell. The Fourier modes and the
 # real-space terms sum in the order of the host. The phases of the Fourier modes
 # are one `cis` each, rather than products of 1D factors.
-@inline function ewald_entry(p::EwaldTensorParams{F}, positions, real_ptr, real_shifts, real_mats,
-                             q, q0, q0_zero, ncells, na, cell, i, j) where F
-    (; dims, recipvecs, mmax, kmax², σ², invV) = p
+@inline function ewald_entry(cache::EwaldTensorCacheDevice{F}, q, q0, q0_zero, ncells, na, cell, i, j) where F
+    (; params, positions, real_ptr, real_shifts, real_mats) = cache
+    (; dims, recipvecs, mmax, kmax², σ², invV) = params
     c = cell - 1
     c1 = c % dims[1]
     c2 = (c ÷ dims[1]) % dims[2]
@@ -46,13 +46,13 @@ end
         end
     end
 
-    q0_zero && (acc += p.demag_V)
+    q0_zero && (acc += params.demag_V)
     idx = cell + ncells * ((i - 1) + na * (j - 1))
     for e in real_ptr[idx]:real_ptr[idx+1]-1
         acc += cis(F(2π) * dot(q, real_shifts[e])) * real_mats[e]
     end
-    (cell == 1 && i == j) && (acc += p.self_energy)
-    return p.μ0_μB² * acc
+    (cell == 1 && i == j) && (acc += params.self_energy)
+    return params.μ0_μB² * acc
 end
 
 # The Ewald tensor Ã[cell, i, j, b] of each wavevector b, mirroring
@@ -60,9 +60,9 @@ end
 # host, the zero-offset cell is completed by Hermiticity, then the excluded
 # couplings are removed. A single call of `ewald_entry`, which is inlined,
 # keeps the kernel small: a call per branch tripled the compile time on POCL.
-@kernel function ewald_tensor!(Ã, p, @Const(positions), @Const(real_ptr), @Const(real_shifts), @Const(real_mats),
-                               @Const(ex_index), @Const(ex_winding), @Const(ex_mats), @Const(qs), @Const(q0s), @Const(q0_zeros))
+@kernel function ewald_tensor!(Ã, cache, @Const(qs), @Const(q0s), @Const(q0_zeros))
     cell, i, j, b = @index(Global, NTuple)
+    (; ex_index, ex_winding, ex_mats) = cache
     F = real(eltype(eltype(Ã)))
     ncells = size(Ã, 1)
     na = size(Ã, 2)
@@ -71,7 +71,7 @@ end
     q0_zero = q0_zeros[b]
     flip = cell == 1 && i > j
     (i′, j′) = flip ? (j, i) : (i, j)
-    v = ewald_entry(p, positions, real_ptr, real_shifts, real_mats, q, q0, q0_zero, ncells, na, cell, i′, j′)
+    v = ewald_entry(cache, q, q0, q0_zero, ncells, na, cell, i′, j′)
     flip && (v = v')
     idx = cell + ncells * ((i - 1) + na * (j - 1))
     for e in eachindex(ex_index)
@@ -87,9 +87,10 @@ end
 # `Sunny.ewald_interaction_tensor` at q, with its cells in linear order. A
 # thread owns row r, and sums its entries in the order of the host. The rows
 # of H are then Hermitian only up to round-off, which `hermitianize!` removes.
-@kernel function accum_ewald!(H, @Const(Ã), @Const(label_ptr), @Const(label_site), @Const(label_coef), @Const(ptr),
-                              @Const(labels), @Const(coefs), @Const(atoms), @Const(cells), @Const(qs_supercell), dims)
+@kernel function accum_ewald!(H, @Const(Ã), ewald, @Const(qs_supercell))
     r, b = @index(Global, NTuple)
+    (; ptr, labels, coefs, atoms, cells, label_ptr, label_site, label_coef) = ewald
+    dims = ewald.cache.dims
     F = real(eltype(H))
     q = qs_supercell[b]
     for e in label_ptr[r]:label_ptr[r+1]-1
@@ -124,8 +125,9 @@ end
 
 # The observables in the Nambu basis, mirroring `Sunny.accum_observable_vectors!`.
 # A thread owns the Nf flavors of site i for observable μ.
-@kernel function observable_vectors!(u, @Const(coefs), @Const(positions), @Const(formfactors), @Const(qs_global), Nf)
+@kernel function observable_vectors!(u, @Const(coefs), measure, @Const(qs_global), Nf)
     i, μ, b = @index(Global, NTuple)
+    (; positions, formfactors) = measure
     L = size(u, 1) ÷ 2
     q = qs_global[b]
     q2 = sum(abs2, q)  # unlike `Sunny.norm2`, in the precision of q

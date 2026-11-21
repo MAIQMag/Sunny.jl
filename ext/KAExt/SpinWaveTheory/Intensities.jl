@@ -69,7 +69,7 @@ Sunny.device_free_memory(::KA.CPU) = Sys.free_memory()
 function susceptibility_poles_device(swt_d::SpinWaveTheoryDevice, qpts; batch_size, budget, threaded)
     (; swt, backend, quadratic_table, ewald, observable_coefs, regularization, measure_mode) = swt_d
     (; sys, measure) = swt
-    (; corr_pairs, forms, positions, formfactors) = swt_d.measure
+    (; corr_pairs, forms) = swt_d.measure
     cryst = Sunny.orig_crystal(sys)
 
     Na = Sunny.nsites(sys)
@@ -123,17 +123,14 @@ function susceptibility_poles_device(swt_d::SpinWaveTheoryDevice, qpts; batch_si
         qs_supercell_d = to_backend(backend, F, qs_supercell)
         qs_global_d = to_backend(backend, F, qs_global)
 
-        (; rowptr, cols, offset_index, vals, offsets) = quadratic_table
-        build_hamiltonian!(backend)(H, rowptr, cols, offset_index, vals, offsets, qs_supercell_d, regularization;
-                                    ndrange=(n, nb))
+        build_hamiltonian!(backend)(H, quadratic_table, qs_supercell_d, regularization; ndrange=(n, nb))
         if !isnothing(ewald)
             accum_ewald_batched!(backend, H, Ã, ewald, qs_supercell, qs_supercell_d, nb)
         end
         KA.synchronize(backend)
         bogoliubov_batched!(T, E, H, nb, swt_d, qs_supercell; threaded)
 
-        observable_vectors!(backend)(u, observable_coefs, positions, formfactors, qs_global_d, Nf;
-                                     ndrange=(Na, Nobs, nb))
+        observable_vectors!(backend)(u, observable_coefs, swt_d.measure, qs_global_d, Nf; ndrange=(Na, Nobs, nb))
         amplitudes!(backend)(A, u, T; ndrange=(Nobs, n, nb))
         if measure_mode == :combiner
             residues_combiner!(backend)(disp, R, E, A, qs_global_d, measure.combiner, corr_pairs, q0, Ncells; ndrange=(n, nb))
@@ -150,14 +147,11 @@ end
 # as `Sunny.accum_ewald!` and `hermitianpart!` for each. Ã is scratch for the
 # Ewald tensor at each wavevector, as `Sunny.ewald_interaction_tensor` gives it.
 function accum_ewald_batched!(backend, H, Ã, ewald::QuadraticEwaldDevice{F}, qs_supercell, qs_supercell_d, nb) where F
-    (; cache, ptr, labels, coefs, atoms, cells, label_ptr, label_site, label_coef) = ewald
-    (; params, positions, real_ptr, real_shifts, real_mats, ex_index, ex_winding, ex_mats) = cache
+    (; cache) = ewald
     n = size(H, 1)
     ewald_qs = ewald_wavevector.(qs_supercell)
-    ewald_tensor!(backend)(Ã, params, positions, real_ptr, real_shifts, real_mats, ex_index, ex_winding, ex_mats,
-                           to_backend(backend, F, first.(ewald_qs)), to_backend(backend, F, getindex.(ewald_qs, 2)),
+    ewald_tensor!(backend)(Ã, cache, to_backend(backend, F, first.(ewald_qs)), to_backend(backend, F, getindex.(ewald_qs, 2)),
                            to_backend(backend, last.(ewald_qs)); ndrange=(ncells(cache), cache.na, cache.na, nb))
-    accum_ewald!(backend)(H, Ã, label_ptr, label_site, label_coef, ptr, labels, coefs, atoms, cells, qs_supercell_d,
-                          cache.dims; ndrange=(n, nb))
+    accum_ewald!(backend)(H, Ã, ewald, qs_supercell_d; ndrange=(n, nb))
     hermitianize!(backend)(H; ndrange=(n, n, nb))
 end
