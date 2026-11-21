@@ -128,7 +128,7 @@
         Random.seed!(0)
         qs = [rand(3) for _ in 1:37]
         swt_d = to_device(swt; backend, eigensolver, precision)
-        regularization = Float64(swt_d.data.regularization)
+        regularization = Float64(swt_d.regularization)
         if regularization != swt.regularization
             swt = SpinWaveTheory(swt.sys; swt.measure, regularization)
         end

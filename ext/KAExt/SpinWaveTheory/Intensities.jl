@@ -67,8 +67,9 @@ Sunny.device_free_memory(::KA.CPU) = Sys.free_memory()
 # Mirrors `Sunny.susceptibility_poles`. Returns the poles disp[n, iq] and the
 # residues R[k, n, iq] by real component k of the measure, on device.
 function susceptibility_poles_device(swt_d::SpinWaveTheoryDevice, qpts; batch_size, budget, threaded)
-    (; swt, backend, data) = swt_d
+    (; swt, backend, quadratic_table, ewald, observable_coefs, regularization, measure_mode) = swt_d
     (; sys, measure) = swt
+    (; corr_pairs, forms, positions, formfactors) = swt_d.measure
     cryst = Sunny.orig_crystal(sys)
 
     Na = Sunny.nsites(sys)
@@ -83,8 +84,7 @@ function susceptibility_poles_device(swt_d::SpinWaveTheoryDevice, qpts; batch_si
 
     # Up to three complex n×n matrices per wavevector (H, T, and the scratch of
     # the Jacobi eigensolver) dominate memory, unless the Ewald tensor does
-    ewald = data.ewald
-    nÃ = isnothing(ewald) ? 0 : 9 * ewald.ncells * ewald.na^2
+    nÃ = isnothing(ewald) ? 0 : 9 * ncells(ewald.cache) * ewald.cache.na^2
     bytes_per_q = 2sizeof(F) * (3n^2 + 2n*Nobs + Nobs^2*K + nÃ) + sizeof(F)*n*(1 + K)
     batch_size = clamp(something(batch_size, budget ÷ bytes_per_q), 1, max(Nq, 1))
 
@@ -96,9 +96,8 @@ function susceptibility_poles_device(swt_d::SpinWaveTheoryDevice, qpts; batch_si
     u = KA.allocate(backend, Complex{F}, (n, Nobs, batch_size))
     A = KA.allocate(backend, Complex{F}, (Nobs, n, batch_size))
     if !isnothing(ewald)
-        Ã = KA.allocate(backend, Sunny.SMatrix{3, 3, Complex{F}, 9}, (ewald.ncells, ewald.na, ewald.na, batch_size))
+        Ã = KA.allocate(backend, Sunny.SMatrix{3, 3, Complex{F}, 9}, (ncells(ewald.cache), ewald.cache.na, ewald.cache.na, batch_size))
     end
-    (; measure_mode) = swt_d
     if measure_mode == :forms
         M_h = zeros(Complex{F}, Nobs, Nobs, K, batch_size)
         M = KA.allocate(backend, Complex{F}, size(M_h))
@@ -124,31 +123,41 @@ function susceptibility_poles_device(swt_d::SpinWaveTheoryDevice, qpts; batch_si
         qs_supercell_d = to_backend(backend, F, qs_supercell)
         qs_global_d = to_backend(backend, F, qs_global)
 
-        build_hamiltonian!(backend)(H, data.rowptr, data.cols, data.offset_index, data.vals, data.offsets,
-                                    qs_supercell_d, data.regularization; ndrange=(n, nb))
+        (; rowptr, cols, offset_index, vals, offsets) = quadratic_table
+        build_hamiltonian!(backend)(H, rowptr, cols, offset_index, vals, offsets, qs_supercell_d, regularization;
+                                    ndrange=(n, nb))
         if !isnothing(ewald)
-            # The Ewald tensor at each wavevector, as `Sunny.accum_ewald!` takes it
-            ewald_qs = ewald_wavevector.(qs_supercell)
-            ewald_tensor!(backend)(Ã, ewald.params, ewald.positions, ewald.real_ptr, ewald.real_shifts, ewald.real_mats,
-                                   ewald.ex_index, ewald.ex_winding, ewald.ex_mats, to_backend(backend, F, first.(ewald_qs)),
-                                   to_backend(backend, F, getindex.(ewald_qs, 2)), to_backend(backend, last.(ewald_qs));
-                                   ndrange=(ewald.ncells, ewald.na, ewald.na, nb))
-            accum_ewald!(backend)(H, Ã, ewald.label_ptr, ewald.label_site, ewald.label_coef, ewald.ptr, ewald.labels,
-                                  ewald.coefs, ewald.atoms, ewald.cells, qs_supercell_d, ewald.dims; ndrange=(n, nb))
-            hermitianize!(backend)(H; ndrange=(n, n, nb))
+            accum_ewald_batched!(backend, H, Ã, ewald, qs_supercell, qs_supercell_d, nb)
         end
         KA.synchronize(backend)
         bogoliubov_batched!(T, E, H, nb, swt_d, qs_supercell; threaded)
 
-        observable_vectors!(backend)(u, data.coefs, data.positions, data.formfactors, qs_global_d, Nf; ndrange=(Na, Nobs, nb))
+        observable_vectors!(backend)(u, observable_coefs, positions, formfactors, qs_global_d, Nf;
+                                     ndrange=(Na, Nobs, nb))
         amplitudes!(backend)(A, u, T; ndrange=(Nobs, n, nb))
         if measure_mode == :combiner
-            residues_combiner!(backend)(disp, R, E, A, qs_global_d, measure.combiner, data.corr_pairs, q0, Ncells; ndrange=(n, nb))
+            residues_combiner!(backend)(disp, R, E, A, qs_global_d, measure.combiner, corr_pairs, q0, Ncells; ndrange=(n, nb))
         else
-            residues!(backend)(disp, R, E, A, measure_mode == :forms ? M : data.forms, q0, Ncells; ndrange=(n, nb))
+            residues!(backend)(disp, R, E, A, measure_mode == :forms ? M : forms, q0, Ncells; ndrange=(n, nb))
         end
         KA.synchronize(backend)
     end
 
     return (disp, R)
+end
+
+# H += T† Ã(q) T for the first `nb` wavevectors, then the Hermitian part of H,
+# as `Sunny.accum_ewald!` and `hermitianpart!` for each. Ã is scratch for the
+# Ewald tensor at each wavevector, as `Sunny.ewald_interaction_tensor` gives it.
+function accum_ewald_batched!(backend, H, Ã, ewald::QuadraticEwaldDevice{F}, qs_supercell, qs_supercell_d, nb) where F
+    (; cache, ptr, labels, coefs, atoms, cells, label_ptr, label_site, label_coef) = ewald
+    (; params, positions, real_ptr, real_shifts, real_mats, ex_index, ex_winding, ex_mats) = cache
+    n = size(H, 1)
+    ewald_qs = ewald_wavevector.(qs_supercell)
+    ewald_tensor!(backend)(Ã, params, positions, real_ptr, real_shifts, real_mats, ex_index, ex_winding, ex_mats,
+                           to_backend(backend, F, first.(ewald_qs)), to_backend(backend, F, getindex.(ewald_qs, 2)),
+                           to_backend(backend, last.(ewald_qs)); ndrange=(ncells(cache), cache.na, cache.na, nb))
+    accum_ewald!(backend)(H, Ã, label_ptr, label_site, label_coef, ptr, labels, coefs, atoms, cells, qs_supercell_d,
+                          cache.dims; ndrange=(n, nb))
+    hermitianize!(backend)(H; ndrange=(n, n, nb))
 end

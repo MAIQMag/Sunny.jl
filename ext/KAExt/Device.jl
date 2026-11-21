@@ -67,16 +67,67 @@ function compute_form_factor(ff::FormFactorDevice{F}, q2_absolute) where F
     return J0 + j2_weight * compute_gaussian_expansion(j2, s2) * s2
 end
 
-# The data of `swt` on `backend`, with floating point numbers in precision F
-struct SpinWaveTheoryDevice{F, B, D <: NamedTuple}
-    swt          :: Sunny.SpinWaveTheory
-    backend      :: B
-    eigensolver  :: Symbol
-    measure_mode :: Symbol  # :combiner, :constant_forms, :forms or :none
-    data         :: D
+# Mirrors `Sunny.QuadraticTable` on a device, in precision F
+struct QuadraticTableDevice{F, VO, VI, VV}
+    offsets      :: VO
+    rowptr       :: VI
+    cols         :: VI
+    offset_index :: VI
+    vals         :: VV
+end
 
-    SpinWaveTheoryDevice{F}(swt, backend::B, eigensolver, measure_mode, data::D) where {F, B, D} =
-        new{F, B, D}(swt, backend, eigensolver, measure_mode, data)
+function QuadraticTableDevice{F}(backend, t::Sunny.QuadraticTable) where F
+    (; offsets, rowptr, cols, offset_index, vals) = t
+    offsets = to_backend(backend, F, offsets)
+    vals = to_backend(backend, F, vals)
+    (rowptr, cols, offset_index) = to_backend.(Ref(backend), (rowptr, cols, offset_index))
+    return QuadraticTableDevice{F, typeof(offsets), typeof(rowptr), typeof(vals)}(offsets, rowptr, cols, offset_index, vals)
+end
+
+# The data of `Sunny.MeasureSpec` that the residues need on a device, in
+# precision F: the pairs of observables to correlate, the forms of the combiner
+# if they are independent of the wavevector (see `resolve_measure_mode`), and
+# the Fourier positions and form factors of each observable, as in
+# `Sunny.observable_prefactor`.
+struct MeasureSpecDevice{F, C, M, VP, VF}
+    corr_pairs  :: C
+    forms       :: M  # Or `nothing`
+    positions   :: VP # [site, part]
+    formfactors :: VF # [observable, site, part]
+end
+
+function MeasureSpecDevice{F}(backend, measure::Sunny.MeasureSpec, sys::Sunny.System, forms) where F
+    Na = Sunny.nsites(sys)
+    Nparts = Sunny.num_parts_per_unit(measure)
+    sites = Sunny.eachsite(sys)
+    positions = [Sunny.global_position_at(sys, sites[i]) + sys.crystal.latvecs * measure.offsets[Sunny.to_atom(sites[i]), p]
+                 for i in 1:Na, p in 1:Nparts]
+    formfactors = [FormFactorDevice{F}(measure.formfactors[μ, Sunny.to_atom(sites[i]), p])
+                   for μ in 1:Sunny.num_observables(measure), i in 1:Na, p in 1:Nparts]
+    corr_pairs = Sunny.SVector{length(measure.corr_pairs)}(measure.corr_pairs)
+    positions = to_backend(backend, F, positions)
+    formfactors = to_backend(backend, formfactors)
+    return MeasureSpecDevice{F, typeof(corr_pairs), typeof(forms), typeof(positions), typeof(formfactors)}(
+        corr_pairs, forms, positions, formfactors)
+end
+
+# Mirrors `Sunny.SpinWaveTheory` on `backend`, with floating point numbers in
+# precision F
+struct SpinWaveTheoryDevice{F, B, Q, E, C, M}
+    swt              :: Sunny.SpinWaveTheory
+    backend          :: B
+    eigensolver      :: Symbol
+    measure_mode     :: Symbol  # :combiner, :constant_forms, :forms or :none
+    regularization   :: F
+    quadratic_table  :: Q
+    ewald            :: E  # Or `nothing`
+    observable_coefs :: C
+    measure          :: M
+
+    SpinWaveTheoryDevice{F}(swt, backend::B, eigensolver, measure_mode, regularization, quadratic_table::Q, ewald::E,
+                            observable_coefs::C, measure::M) where {F, B, Q, E, C, M} =
+        new{F, B, Q, E, C, M}(swt, backend, eigensolver, measure_mode, regularization, quadratic_table, ewald,
+                              observable_coefs, measure)
 end
 
 precision_of(::SpinWaveTheoryDevice{F}) where F = F
@@ -160,43 +211,21 @@ function Sunny.to_device(swt::Sunny.SpinWaveTheory; backend=KA.CPU(), eigensolve
     F = precision
     F in (Float32, Float64) || error("Unsupported precision $F; use Float64 or Float32")
 
-    (; sys, measure, quadratic_table, observable_coefs) = swt
-    (; rowptr, cols, offset_index, vals, offsets) = quadratic_table
-    Na = Sunny.nsites(sys)
-    Nparts = Sunny.num_parts_per_unit(measure)
-
-    # Fourier positions and form factors of each observable, as in
-    # `Sunny.observable_prefactor`
-    sites = Sunny.eachsite(sys)
-    positions = [Sunny.global_position_at(sys, sites[i]) + sys.crystal.latvecs * measure.offsets[Sunny.to_atom(sites[i]), p]
-                 for i in 1:Na, p in 1:Nparts]
-    formfactors = [FormFactorDevice{F}(measure.formfactors[μ, Sunny.to_atom(sites[i]), p])
-                   for μ in 1:Sunny.num_observables(measure), i in 1:Na, p in 1:Nparts]
-
+    (; sys, measure, quadratic_table, observable_coefs, ewald) = swt
+    L = Sunny.nbands(swt)
     corr_pairs = Sunny.SVector{length(measure.corr_pairs)}(measure.corr_pairs)
     (measure_mode, forms) = resolve_measure_mode(backend, F, measure, corr_pairs)
-
-    data = (;
-        corr_pairs,
-        forms,
-        rowptr       = to_backend(backend, rowptr),
-        cols         = to_backend(backend, cols),
-        offset_index = to_backend(backend, offset_index),
-        vals         = to_backend(backend, F, vals),
-        offsets      = to_backend(backend, F, offsets),
-        coefs        = to_backend(backend, F, observable_coefs),
-        positions    = to_backend(backend, F, positions),
-        formfactors  = to_backend(backend, formfactors),
-        regularization = device_regularization(swt, F),
-        ewald        = ewald_device(backend, F, swt.ewald, 2Sunny.nbands(swt)),
-    )
-    eigensolver = resolve_eigensolver(backend, eigensolver, 2Sunny.nbands(swt), F)
-    return SpinWaveTheoryDevice{F}(swt, backend, eigensolver, measure_mode, data)
+    eigensolver = resolve_eigensolver(backend, eigensolver, 2L, F)
+    return SpinWaveTheoryDevice{F}(swt, backend, eigensolver, measure_mode, device_regularization(swt, F),
+                                   QuadraticTableDevice{F}(backend, quadratic_table),
+                                   isnothing(ewald) ? nothing : QuadraticEwaldDevice{F}(backend, ewald, L),
+                                   to_backend(backend, F, observable_coefs),
+                                   MeasureSpecDevice{F}(backend, measure, sys, forms))
 end
 
-# The parameters of `Sunny.EwaldTensorCache` in precision F, for the kernel
-# `ewald_tensor!`
-struct EwaldTensorDevice{F}
+# The constants of `Sunny.ewald_interaction_tensor` in precision F, isbits so
+# that the kernel `ewald_tensor!` takes them as one argument
+struct EwaldTensorParams{F}
     dims        :: NTuple{3, Int32}
     recipvecs   :: Sunny.SMatrix{3, 3, F, 9}  # Of the supercell
     mmax        :: NTuple{3, Int32}
@@ -208,58 +237,83 @@ struct EwaldTensorDevice{F}
     self_energy :: Sunny.SMatrix{3, 3, F, 9}
 end
 
-# The Ewald pair term of `Sunny.QuadraticEwald` on `backend`, or `nothing`
-# without dipole-dipole interactions.
+# Mirrors `Sunny.EwaldTensorCache` on a device, in precision F. The real-space
+# terms of each linear index of [cell, i, j] are in CSR form, `real_ptr`, as
+# are the excluded couplings, which are few: the linear index, winding and
+# tensor of each.
+struct EwaldTensorCacheDevice{F, VI, V3, VM}
+    dims        :: NTuple{3, Int32}
+    na          :: Int
+    params      :: EwaldTensorParams{F}
+    positions   :: V3
+    real_ptr    :: VI
+    real_shifts :: V3
+    real_mats   :: VM
+    ex_index    :: VI
+    ex_winding  :: V3
+    ex_mats     :: VM
+end
+
+function EwaldTensorCacheDevice{F}(backend, cache::Sunny.EwaldTensorCache) where F
+    (; dims, cryst, μ0_μB², demag, σ², mmax, kmax², real_terms, excluded) = cache
+    na = Sunny.natoms(cryst)
+    V = abs(det(cryst.latvecs)) * prod(dims)
+    params = EwaldTensorParams{F}(Int32.(dims), cryst.recipvecs / diagm(Vec3(dims)), Int32.(mmax), kmax², σ², 1/V,
+                                  μ0_μB², demag / V, -Sunny.Mat3(I) / (3(2π)^(3/2) * σ²^(3/2)))
+    terms = vec(real_terms)
+    LI = LinearIndices((prod(dims), na, na))
+    LC = LinearIndices(dims)
+    positions = to_backend(backend, F, cryst.positions)
+    real_ptr = to_backend(backend, Int32[1; 1 .+ cumsum(length.(terms))])
+    real_mats = to_backend(backend, F, [A for t in terms for (_, A) in t])
+    return EwaldTensorCacheDevice{F, typeof(real_ptr), typeof(positions), typeof(real_mats)}(
+        Int32.(dims), na, params, positions, real_ptr,
+        to_backend(backend, F, [Vec3(n) for t in terms for (n, _) in t]),
+        real_mats,
+        to_backend(backend, Int32[LI[LC[(mod.(bond.n, dims) .+ 1)...], bond.i, bond.j] for (; bond) in excluded]),
+        to_backend(backend, F, [Vec3(fld.(bond.n, dims)) for (; bond) in excluded]),
+        to_backend(backend, F, [A_loc for (; A_loc) in excluded]),
+    )
+end
+
+ncells(cache::EwaldTensorCacheDevice) = Int(prod(cache.dims))
+
+# Mirrors `Sunny.QuadraticEwald` on a device, in precision F, for L bands.
 #
-# The entries of T are given twice: per bare site j, as in `E.ptr`, and per
-# Nambu label r, so that the thread of row r of H gathers its entries without
-# races. The entries of each label are ordered by site, so that each entry of H
-# sums in the order of `Sunny.accum_ewald!`.
-#
-# The Ewald tensor follows `Sunny.ewald_interaction_tensor`. The real-space
-# terms of each linear index of [cell, i, j] are in CSR form, as are the
-# excluded couplings, which are few.
-ewald_device(_, _, ::Nothing, _) = nothing
-function ewald_device(backend, F, E::Sunny.QuadraticEwald, n)
+# The entries of T are given twice: per bare site j, as in `ptr`, and per Nambu
+# label r, as in `label_ptr`, so that the thread of row r of H gathers its
+# entries without races. The entries of each label are ordered by site, so
+# that each entry of H sums in the order of `Sunny.accum_ewald!`.
+struct QuadraticEwaldDevice{F, C <: EwaldTensorCacheDevice{F}, VI, VC, VN}
+    cache      :: C
+    ptr        :: VI
+    labels     :: VI
+    coefs      :: VC
+    atoms      :: VI
+    cells      :: VN
+    label_ptr  :: VI
+    label_site :: VI
+    label_coef :: VC
+end
+
+function QuadraticEwaldDevice{F}(backend, E::Sunny.QuadraticEwald, L) where F
     (; cache, ptr, labels, coefs, atoms, cells) = E
-    by_label = [Int[] for _ in 1:n]
+    by_label = [Int[] for _ in 1:2L]
     for i in eachindex(cells), e in ptr[i]:ptr[i+1]-1
         push!(by_label[labels[e]], e)
     end
     es = reduce(vcat, by_label)
     site_of = [i for i in eachindex(cells) for _ in ptr[i]:ptr[i+1]-1]
 
-    (; dims, cryst, μ0_μB², demag, σ², mmax, kmax², real_terms, excluded) = cache
-    na = Sunny.natoms(cryst)
-    ncells = prod(dims)
-    V = abs(det(cryst.latvecs)) * ncells
-    params = EwaldTensorDevice{F}(Int32.(dims), cryst.recipvecs / diagm(Vec3(dims)), Int32.(mmax), kmax², σ², 1/V,
-                                  μ0_μB², demag / V, -Sunny.Mat3(I) / (3(2π)^(3/2) * σ²^(3/2)))
-    terms = vec(real_terms)
-    LI = LinearIndices((ncells, na, na))
-    LC = LinearIndices(dims)
-    ex_index = Int32[LI[LC[(mod.(bond.n, dims) .+ 1)...], bond.i, bond.j] for (; bond) in excluded]
-
-    return (;
-        ncells,
-        na,
-        dims       = Int32.(dims),
-        ptr        = to_backend(backend, ptr),
-        labels     = to_backend(backend, labels),
-        coefs      = to_backend(backend, F, coefs),
-        label_ptr  = to_backend(backend, Int32[1; 1 .+ cumsum(length.(by_label))]),
-        label_site = to_backend(backend, Int32.(site_of[es])),
-        label_coef = to_backend(backend, F, coefs[es]),
-        atoms      = to_backend(backend, Int32.(atoms)),
-        cells      = to_backend(backend, [Int32.(c) for c in cells]),
-        params,
-        positions   = to_backend(backend, F, cryst.positions),
-        real_ptr    = to_backend(backend, Int32[1; 1 .+ cumsum(length.(terms))]),
-        real_shifts = to_backend(backend, F, [Vec3(n) for t in terms for (n, _) in t]),
-        real_mats   = to_backend(backend, F, [A for t in terms for (_, A) in t]),
-        ex_index    = to_backend(backend, ex_index),
-        ex_winding  = to_backend(backend, F, [Vec3(fld.(bond.n, dims)) for (; bond) in excluded]),
-        ex_mats     = to_backend(backend, F, [A_loc for (; A_loc) in excluded]),
+    cache = EwaldTensorCacheDevice{F}(backend, cache)
+    ptr = to_backend(backend, ptr)
+    coefs_d = to_backend(backend, F, coefs)
+    cells = to_backend(backend, [Int32.(c) for c in cells])
+    return QuadraticEwaldDevice{F, typeof(cache), typeof(ptr), typeof(coefs_d), typeof(cells)}(
+        cache, ptr, to_backend(backend, labels), coefs_d, to_backend(backend, Int32.(atoms)), cells,
+        to_backend(backend, Int32[1; 1 .+ cumsum(length.(by_label))]),
+        to_backend(backend, Int32.(site_of[es])),
+        to_backend(backend, F, coefs[es]),
     )
 end
 

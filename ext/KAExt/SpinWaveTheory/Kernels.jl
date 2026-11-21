@@ -23,7 +23,7 @@ end
 # `cell` the linear index of a cell of the supercell. The Fourier modes and the
 # real-space terms sum in the order of the host. The phases of the Fourier modes
 # are one `cis` each, rather than products of 1D factors.
-@inline function ewald_entry(p::EwaldTensorDevice{F}, positions, real_ptr, real_shifts, real_mats,
+@inline function ewald_entry(p::EwaldTensorParams{F}, positions, real_ptr, real_shifts, real_mats,
                              q, q0, q0_zero, ncells, na, cell, i, j) where F
     (; dims, recipvecs, mmax, kmax², σ², invV) = p
     c = cell - 1
@@ -83,7 +83,7 @@ end
 end
 
 # H += T† Ã(q) T, the Ewald pair term of each wavevector b, mirroring
-# `Sunny.accum_ewald!` for the data of `ewald_device`. Here Ã[cell, a, b′, b] is
+# `Sunny.accum_ewald!` for a `QuadraticEwaldDevice`. Here Ã[cell, a, b′, b] is
 # `Sunny.ewald_interaction_tensor` at q, with its cells in linear order. A
 # thread owns row r, and sums its entries in the order of the host. The rows
 # of H are then Hermitian only up to round-off, which `hermitianize!` removes.
