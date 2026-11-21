@@ -119,35 +119,82 @@ end
 
 # The broadening of `Sunny.broaden_poles` for poles disp[n, iq] and residues
 # R[k, n, iq] by real component k of the measure, prepared for application to
-# batches of wavevectors by `broaden_batch!`
-function prepare_broadening(backend, disp, R; energies, η, kernel, kT)
+# batches of wavevectors by `broaden_batch!`. The three cases are those of the
+# host.
+function broaden_poles_plan(disp, R; energies, η, kernel, kT)
     η >= 0 || error("Require η ≥ 0")
     kT >= 0 || error("Require kT ≥ 0")
     iszero(η) && isnothing(kernel) && error("Specify a `kernel`, a broadening `η`, or both.")
     issorted(energies) || error("Energies must be sorted")
-
-    (K, n, Nq) = size(R)
     F = eltype(R)
-    Nω = length(energies)
-    energies_d = to_backend(backend, collect(F, energies))
-
-    if iszero(η) || isnothing(kernel)
-        thermal = iszero(η)
-        W = KA.allocate(backend, F, (K, n, Nq))
-        norms = KA.allocate(backend, F, (n, Nq))
-        Nq > 0 && peak_weights!(backend)(W, norms, disp, R, F(kT), thermal; ndrange=(n, Nq))
-        KA.synchronize(backend)
-        cutoff = F(Nq > 0 ? 1e-12 * Sunny.Statistics.quantile(vec(Array(norms)), 0.95) : 0.0)
-        kern = thermal ? device_kernel(kernel, F) : LorentzianThermal{F}(η, kT)
-        return (; kind=:peaks, K, Nω, energies_d, disp, W, norms, cutoff, kern, bytes_per_q=sizeof(F)*K*Nω)
+    if iszero(η)
+        return PeakBroadeningDevice(disp, R, energies, device_kernel(kernel, F); kT, thermal=true)
+    elseif isnothing(kernel)
+        return PeakBroadeningDevice(disp, R, energies, LorentzianThermal{F}(η, kT); kT, thermal=false)
     else
-        (; zs, W, ranges) = Sunny.RetardedBroadening(energies; η, kernel, kT, order=16, cutoff=1e-16)
-        (zs, W, blocks) = banded_quadrature(zs, W, ranges)
-        Nz = length(zs)
-        return (; kind=:retarded, K, Nω, disp, R, Nz, blocks, zs=to_backend(backend, F, zs),
-                Wr=to_backend(backend, F, real(W) / π), Wi=to_backend(backend, F, imag(W) / π), bytes_per_q=sizeof(F)*K*(2Nω + 2Nz))
+        return RetardedBroadeningDevice(disp, R, energies; η, kernel, kT)
     end
 end
+
+# The poles and weights of `Sunny.broaden_peaks!` on a device. The weights
+# W[k, n, iq] include the thermal factor if the `kernel` does not, and poles
+# whose weight has a norm below `cutoff` are skipped.
+struct PeakBroadeningDevice{F, A2, A3, VE, Kern}
+    disp     :: A2
+    W        :: A3
+    norms    :: A2
+    cutoff   :: F
+    energies :: VE
+    kernel   :: Kern
+end
+
+function PeakBroadeningDevice(disp, R, energies, kernel; kT, thermal)
+    backend = KA.get_backend(R)
+    (K, n, Nq) = size(R)
+    F = eltype(R)
+    W = KA.allocate(backend, F, (K, n, Nq))
+    norms = KA.allocate(backend, F, (n, Nq))
+    Nq > 0 && peak_weights!(backend)(W, norms, disp, R, F(kT), thermal; ndrange=(n, Nq))
+    KA.synchronize(backend)
+    cutoff = F(Nq > 0 ? 1e-12 * Sunny.Statistics.quantile(vec(Array(norms)), 0.95) : 0.0)
+    energies = to_backend(backend, collect(F, energies))
+    return PeakBroadeningDevice{F, typeof(disp), typeof(W), typeof(energies), typeof(kernel)}(disp, W, norms, cutoff,
+                                                                                             energies, kernel)
+end
+
+# Mirrors `Sunny.RetardedBroadening` on a device, with the poles and residues
+# to which it applies. The weights are split into real and imaginary parts
+# divided by π, in the banded form of `banded_quadrature`.
+struct RetardedBroadeningDevice{F, A2, A3, VZ, M}
+    disp   :: A2
+    R      :: A3
+    Nω     :: Int
+    zs     :: VZ
+    Wr     :: M
+    Wi     :: M
+    blocks :: Vector{Tuple{UnitRange{Int}, UnitRange{Int}}}
+end
+
+function RetardedBroadeningDevice(disp, R, energies; η, kernel, kT)
+    backend = KA.get_backend(R)
+    F = eltype(R)
+    (; zs, W, ranges) = Sunny.RetardedBroadening(energies; η, kernel, kT, order=16, cutoff=1e-16)
+    (zs, W, blocks) = banded_quadrature(zs, W, ranges)
+    zs = to_backend(backend, F, zs)
+    Wr = to_backend(backend, F, real(W) / π)
+    return RetardedBroadeningDevice{F, typeof(disp), typeof(R), typeof(zs), typeof(Wr)}(
+        disp, R, length(energies), zs, Wr, to_backend(backend, F, imag(W) / π), blocks)
+end
+
+num_components(plan::PeakBroadeningDevice) = size(plan.W, 1)
+num_components(plan::RetardedBroadeningDevice) = size(plan.R, 1)
+num_energies(plan::PeakBroadeningDevice) = length(plan.energies)
+num_energies(plan::RetardedBroadeningDevice) = plan.Nω
+
+# Bytes of device memory per wavevector for the output of `broaden_batch!` and
+# its scratch
+bytes_per_q(plan::PeakBroadeningDevice{F}) where F = sizeof(F) * num_components(plan) * num_energies(plan)
+bytes_per_q(plan::RetardedBroadeningDevice{F}) where F = sizeof(F) * num_components(plan) * (2plan.Nω + 2length(plan.zs))
 
 # The quadrature of `Sunny.RetardedBroadening` with its weights W[i, j] in a
 # banded form. Nodes that contribute to no energy are dropped, the others are
@@ -170,38 +217,42 @@ function banded_quadrature(zs, W, ranges; block=32)
     return (zs[js], W′, blocks)
 end
 
-# Broadens the wavevectors q0+1:q0+nb into data[k, iω, d0+1:d0+nb]. The scratch
-# for the retarded broadening, if any, holds at least nb wavevectors.
-function broaden_batch!(backend, data, plan, q0, nb, d0, scratch)
-    if plan.kind == :peaks
-        (; disp, W, norms, cutoff, energies_d, kern, Nω) = plan
-        broaden_peaks!(backend)(data, disp, W, norms, cutoff, energies_d, kern, q0, d0; ndrange=(Nω, nb))
-    else
-        # The quadrature applied to the sums at the nodes, y = Wr χi + Wi χr,
-        # as one matrix product over all components and wavevectors
-        (; disp, R, K, Nz, blocks, zs, Wr, Wi, Nω) = plan
-        (χr, χi, y) = scratch
-        fill!(y, 0)
-        if Nz > 0
-            retarded_susceptibility!(backend)(χr, χi, disp, R, zs, q0; ndrange=(Nz, nb))
-            m = K * nb
-            (y2, χr2, χi2) = (reshape(y, Nω, :), reshape(χr, Nz, :), reshape(χi, Nz, :))
-            for (is, js) in blocks
-                yb = view(y2, is, 1:m)
-                mul!(yb, view(Wr, is, js), view(χi2, js, 1:m))
-                mul!(yb, view(Wi, is, js), view(χr2, js, 1:m), true, true)
-            end
-        end
-        scatter_components!(backend)(data, y, d0; ndrange=(Nω, nb))
-    end
+# Broadens the wavevectors q0+1:q0+nb into data[k, iω, d0+1:d0+nb], as
+# `Sunny.broaden_peaks!` does
+function broaden_batch!(data, plan::PeakBroadeningDevice, q0, nb, d0, _)
+    (; disp, W, norms, cutoff, energies, kernel) = plan
+    backend = KA.get_backend(data)
+    broaden_peaks!(backend)(data, disp, W, norms, cutoff, energies, kernel, q0, d0; ndrange=(length(energies), nb))
     return
 end
 
-function broadening_scratch(backend, plan, nb)
-    plan.kind == :peaks && return nothing
-    (; K, Nz, Nω) = plan
-    F = eltype(plan.R)
-    χr = KA.allocate(backend, F, (Nz, K, nb))
-    χi = KA.allocate(backend, F, (Nz, K, nb))
-    return (χr, χi, KA.allocate(backend, F, (Nω, K, nb)))
+# The same for the retarded broadening, with `scratch` for at least nb
+# wavevectors. The quadrature applies to the sums at the nodes, y = Wr χi + Wi
+# χr, as one matrix product over all components and wavevectors.
+function broaden_batch!(data, plan::RetardedBroadeningDevice, q0, nb, d0, scratch)
+    (; disp, R, Nω, zs, Wr, Wi, blocks) = plan
+    backend = KA.get_backend(data)
+    K = num_components(plan)
+    Nz = length(zs)
+    (χr, χi, y) = scratch
+    fill!(y, 0)
+    if Nz > 0
+        retarded_susceptibility!(backend)(χr, χi, disp, R, zs, q0; ndrange=(Nz, nb))
+        m = K * nb
+        (y2, χr2, χi2) = (reshape(y, Nω, :), reshape(χr, Nz, :), reshape(χi, Nz, :))
+        for (is, js) in blocks
+            yb = view(y2, is, 1:m)
+            mul!(yb, view(Wr, is, js), view(χi2, js, 1:m))
+            mul!(yb, view(Wi, is, js), view(χr2, js, 1:m), true, true)
+        end
+    end
+    scatter_components!(backend)(data, y, d0; ndrange=(Nω, nb))
+    return
+end
+
+broadening_scratch(::PeakBroadeningDevice, nb) = nothing
+function broadening_scratch(plan::RetardedBroadeningDevice{F}, nb) where F
+    backend = KA.get_backend(plan.R)
+    (K, Nz, Nω) = (num_components(plan), length(plan.zs), plan.Nω)
+    return (KA.allocate(backend, F, (Nz, K, nb)), KA.allocate(backend, F, (Nz, K, nb)), KA.allocate(backend, F, (Nω, K, nb)))
 end

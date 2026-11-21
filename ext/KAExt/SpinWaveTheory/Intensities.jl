@@ -25,17 +25,17 @@ function Sunny.intensities(swt_d::SpinWaveTheoryDevice, qpts; energies, η=0, ke
     budget = memory_budget(backend)
 
     (disp, R) = susceptibility_poles_device(swt_d, qpts; batch_size, budget, threaded)
-    plan = prepare_broadening(backend, disp, R; energies, η, kernel, kT)
-    K = plan.K
+    plan = broaden_poles_plan(disp, R; energies, η, kernel, kT)
+    K = num_components(plan)
 
     # The broadening of a batch, and on output to the host also its copy, are
     # bounded by the budget
-    bq = clamp(something(batch_size, budget ÷ max(plan.bytes_per_q, 1)), 1, max(Nq, 1))
-    scratch = broadening_scratch(backend, plan, bq)
+    bq = clamp(something(batch_size, budget ÷ max(bytes_per_q(plan), 1)), 1, max(Nq, 1))
+    scratch = broadening_scratch(plan, bq)
     if output == :device
         data = KA.allocate(backend, F, (K, Nω, Nq))
         for q0 in 0:bq:Nq-1
-            broaden_batch!(backend, data, plan, q0, min(bq, Nq - q0), q0, scratch)
+            broaden_batch!(data, plan, q0, min(bq, Nq - q0), q0, scratch)
         end
         KA.synchronize(backend)
         data = reshape(reinterpret(precision_type(F, Ret), data), Nω, size(qpts.qs)...)
@@ -45,7 +45,7 @@ function Sunny.intensities(swt_d::SpinWaveTheoryDevice, qpts; energies, η=0, ke
         buf = KA.allocate(backend, F, (K, Nω, bq))
         for q0 in 0:bq:Nq-1
             nb = min(bq, Nq - q0)
-            broaden_batch!(backend, buf, plan, q0, nb, 0, scratch)
+            broaden_batch!(buf, plan, q0, nb, 0, scratch)
             KA.synchronize(backend)
             copyto!(data, K*Nω*q0 + 1, buf, 1, K*Nω*nb)
         end
