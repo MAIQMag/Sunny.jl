@@ -2,7 +2,7 @@
 # `Sunny.hamiltonian_matrix!` without the Ewald term, which `accum_ewald!` adds.
 # A thread owns row r, and sums its entries in the order of `Sunny.accum_table!`,
 # so that H is exactly Hermitian.
-@kernel function build_hamiltonian!(H, table, @Const(qs_supercell), regularization)
+@kernel function build_hamiltonian!(H, @Const(table), @Const(qs_supercell), regularization)
     r, b = @index(Global, NTuple)
     (; rowptr, cols, offset_index, vals, offsets) = table
     F = real(eltype(H))
@@ -60,7 +60,7 @@ end
 # host, the zero-offset cell is completed by Hermiticity, then the excluded
 # couplings are removed. A single call of `ewald_entry`, which is inlined,
 # keeps the kernel small: a call per branch tripled the compile time on POCL.
-@kernel function ewald_tensor!(Ã, cache, @Const(qs), @Const(q0s), @Const(q0_zeros))
+@kernel function ewald_tensor!(Ã, @Const(cache), @Const(qs), @Const(q0s), @Const(q0_zeros))
     cell, i, j, b = @index(Global, NTuple)
     (; ex_index, ex_winding, ex_mats) = cache
     F = real(eltype(eltype(Ã)))
@@ -87,7 +87,7 @@ end
 # `Sunny.ewald_interaction_tensor` at q, with its cells in linear order. A
 # thread owns row r, and sums its entries in the order of the host. The rows
 # of H are then Hermitian only up to round-off, which `hermitianize!` removes.
-@kernel function accum_ewald!(H, @Const(Ã), ewald, @Const(qs_supercell))
+@kernel function accum_ewald!(H, @Const(Ã), @Const(ewald), @Const(qs_supercell))
     r, b = @index(Global, NTuple)
     (; ptr, labels, coefs, atoms, cells, label_ptr, label_site, label_coef) = ewald
     dims = ewald.cache.dims
@@ -125,7 +125,7 @@ end
 
 # The observables in the Nambu basis, mirroring `Sunny.accum_observable_vectors!`.
 # A thread owns the Nf flavors of site i for observable μ.
-@kernel function observable_vectors!(u, @Const(coefs), measure, @Const(qs_global), Nf)
+@kernel function observable_vectors!(u, @Const(coefs), @Const(measure), @Const(qs_global), Nf)
     i, μ, b = @index(Global, NTuple)
     (; positions, formfactors) = measure
     L = size(u, 1) ÷ 2
