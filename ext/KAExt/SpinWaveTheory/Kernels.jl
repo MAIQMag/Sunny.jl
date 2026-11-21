@@ -1,7 +1,7 @@
-# The Hamiltonian matrix H(q) of each wavevector b, mirroring
-# `Sunny.hamiltonian_matrix!` without the Ewald term, which `accum_ewald!` adds.
-# A thread owns row r, and sums its entries in the order of `Sunny.accum_table!`,
-# so that H is exactly Hermitian.
+# H = 0, then the entries of the quadratic table of each wavevector b, as
+# `Sunny.accum_table!`, then `regularization` on the diagonal. A thread owns row
+# r, and sums its entries in the order of the host, so that H is exactly
+# Hermitian. With an Ewald term, `hermitianize!` adds the regularization instead.
 @kernel function build_hamiltonian!(H, @Const(table), @Const(qs_supercell), regularization)
     r, b = @index(Global, NTuple)
     (; rowptr, cols, offset_index, vals, offsets) = table
@@ -111,11 +111,12 @@ end
     end
 end
 
-# H = (H + H†)/2 for each wavevector b, as `LinearAlgebra.hermitianpart!`
-@kernel function hermitianize!(H)
+# H = (H + H†)/2 for each wavevector b, as `LinearAlgebra.hermitianpart!`, then
+# `regularization` on the diagonal
+@kernel function hermitianize!(H, regularization)
     r, c, b = @index(Global, NTuple)
     if r == c
-        H[r, r, b] = real(H[r, r, b])
+        H[r, r, b] = real(H[r, r, b]) + regularization
     elseif r < c
         v = (H[r, c, b] + conj(H[c, r, b])) / 2
         H[r, c, b] = v
