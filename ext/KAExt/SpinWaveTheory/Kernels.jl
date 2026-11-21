@@ -1,8 +1,8 @@
 # H = 0, then the entries of the quadratic table of each wavevector b, as
 # `Sunny.accum_table!`, then `regularization` on the diagonal. A thread owns row
 # r, and sums its entries in the order of the host, so that H is exactly
-# Hermitian. With an Ewald term, `hermitianize!` adds the regularization instead.
-@kernel function build_hamiltonian!(H, @Const(table), @Const(qs_supercell), regularization)
+# Hermitian. With an Ewald term, `hermitianpart!` adds the regularization instead.
+@kernel function accum_table!(H, @Const(table), @Const(qs_supercell), regularization)
     r, b = @index(Global, NTuple)
     (; rowptr, cols, offset_index, vals, offsets) = table
     F = real(eltype(H))
@@ -60,7 +60,7 @@ end
 # host, the zero-offset cell is completed by Hermiticity, then the excluded
 # couplings are removed. A single call of `ewald_entry`, which is inlined,
 # keeps the kernel small: a call per branch tripled the compile time on POCL.
-@kernel function ewald_tensor!(Ã, @Const(cache), @Const(qs), @Const(q0s), @Const(q0_zeros))
+@kernel function ewald_interaction_tensor!(Ã, @Const(cache), @Const(qs), @Const(q0s), @Const(q0_zeros))
     cell, i, j, b = @index(Global, NTuple)
     (; ex_index, ex_winding, ex_mats) = cache
     F = real(eltype(eltype(Ã)))
@@ -86,7 +86,7 @@ end
 # `Sunny.accum_ewald!` for a `QuadraticEwaldDevice`. Here Ã[cell, a, b′, b] is
 # `Sunny.ewald_interaction_tensor` at q, with its cells in linear order. A
 # thread owns row r, and sums its entries in the order of the host. The rows
-# of H are then Hermitian only up to round-off, which `hermitianize!` removes.
+# of H are then Hermitian only up to round-off, which `hermitianpart!` removes.
 @kernel function accum_ewald!(H, @Const(Ã), @Const(ewald), @Const(qs_supercell))
     r, b = @index(Global, NTuple)
     (; ptr, labels, coefs, atoms, cells, label_ptr, label_site, label_coef) = ewald
@@ -113,7 +113,7 @@ end
 
 # H = (H + H†)/2 for each wavevector b, as `LinearAlgebra.hermitianpart!`, then
 # `regularization` on the diagonal
-@kernel function hermitianize!(H, regularization)
+@kernel function hermitianpart!(H, regularization)
     r, c, b = @index(Global, NTuple)
     if r == c
         H[r, r, b] = real(H[r, r, b]) + regularization
@@ -170,16 +170,16 @@ end
 # mirroring `Sunny.susceptibility_poles`. The combiner receives the pair
 # correlations as a static vector. A pole at negative energy has a negative
 # weight.
-@kernel function residues_combiner!(disp, R, @Const(E), @Const(A), @Const(qs_global), combiner, corr_pairs, q0, Ncells)
+@kernel function residues_combiner!(disp, R, @Const(E), @Const(A), @Const(qs_global), combiner, corr_pairs, iq0, Ncells)
     n, b = @index(Global, NTuple)
     ε = E[n, b]
-    disp[n, q0+b] = ε
+    disp[n, iq0+b] = ε
     corr = map(corr_pairs) do (μ, ν)
         A[μ, n, b] * conj(A[ν, n, b]) / Ncells
     end
     xs = real_components(combiner(qs_global[b], corr))
     for k in eachindex(xs)
-        R[k, n, q0+b] = sign(ε) * xs[k]
+        R[k, n, iq0+b] = sign(ε) * xs[k]
     end
 end
 
@@ -187,10 +187,10 @@ end
 # correlations C = A A† / Ncells of a band are rank one, so component k of the
 # combiner is tr(M_k C) = A† M_k A / Ncells, for the forms M_k of
 # `Sunny.measure_forms`, given per wavevector or once for all.
-@kernel function residues!(disp, R, @Const(E), @Const(A), @Const(M), q0, Ncells)
+@kernel function residues!(disp, R, @Const(E), @Const(A), @Const(M), iq0, Ncells)
     n, b = @index(Global, NTuple)
     ε = E[n, b]
-    disp[n, q0+b] = ε
+    disp[n, iq0+b] = ε
     bM = size(M, 4) == 1 ? 1 : b
     for k in axes(M, 3)
         s = zero(eltype(A))
@@ -200,6 +200,6 @@ end
                 s += conj(A[μ, n, b]) * M[μ, ν, k, bM] * Aν
             end
         end
-        R[k, n, q0+b] = sign(ε) * real(s) / Ncells
+        R[k, n, iq0+b] = sign(ε) * real(s) / Ncells
     end
 end

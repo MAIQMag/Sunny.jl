@@ -34,8 +34,8 @@ function Sunny.intensities(swt_d::SpinWaveTheoryDevice, qpts; energies, η=0, ke
     scratch = broadening_scratch(plan, bq)
     if output == :device
         data = KA.allocate(backend, F, (K, Nω, Nq))
-        for q0 in 0:bq:Nq-1
-            broaden_batch!(data, plan, q0, min(bq, Nq - q0), q0, scratch)
+        for iq0 in 0:bq:Nq-1
+            broaden_batch!(data, plan, iq0, min(bq, Nq - iq0), iq0, scratch)
         end
         KA.synchronize(backend)
         data = reshape(reinterpret(precision_type(F, Ret), data), Nω, size(qpts.qs)...)
@@ -43,11 +43,11 @@ function Sunny.intensities(swt_d::SpinWaveTheoryDevice, qpts; energies, η=0, ke
     else
         data = Array{F}(undef, K, Nω, Nq)
         buf = KA.allocate(backend, F, (K, Nω, bq))
-        for q0 in 0:bq:Nq-1
-            nb = min(bq, Nq - q0)
-            broaden_batch!(buf, plan, q0, nb, 0, scratch)
+        for iq0 in 0:bq:Nq-1
+            nb = min(bq, Nq - iq0)
+            broaden_batch!(buf, plan, iq0, nb, 0, scratch)
             KA.synchronize(backend)
-            copyto!(data, K*Nω*q0 + 1, buf, 1, K*Nω*nb)
+            copyto!(data, K*Nω*iq0 + 1, buf, 1, K*Nω*nb)
         end
         data = convert(Array{Float64}, data)
         data = reshape(Ret == Float64 ? data : Sunny.measure_values(Ret, data), Nω, size(qpts.qs)...)
@@ -102,9 +102,9 @@ function susceptibility_poles_device(swt_d::SpinWaveTheoryDevice, qpts; batch_si
         M = KA.allocate(backend, Complex{F}, size(M_h))
     end
 
-    for q0 in 0:batch_size:Nq-1
-        nb = min(batch_size, Nq - q0)
-        qs = view(qpts.qs, q0+1:q0+nb)
+    for iq0 in 0:batch_size:Nq-1
+        nb = min(batch_size, Nq - iq0)
+        qs = view(qpts.qs, iq0+1:iq0+nb)
         qs_supercell = [Sunny.to_supercell_rlu(sys, q) for q in qs]
         qs_global = [cryst.recipvecs * Vec3(q) for q in qs]
 
@@ -127,9 +127,9 @@ function susceptibility_poles_device(swt_d::SpinWaveTheoryDevice, qpts; batch_si
         observable_vectors!(backend)(u, observable_coefs, swt_d.measure, qs_global_d, Nf; ndrange=(Na, Nobs, nb))
         amplitudes!(backend)(A, u, T; ndrange=(Nobs, n, nb))
         if measure_mode == :combiner
-            residues_combiner!(backend)(disp, R, E, A, qs_global_d, measure.combiner, corr_pairs, q0, Ncells; ndrange=(n, nb))
+            residues_combiner!(backend)(disp, R, E, A, qs_global_d, measure.combiner, corr_pairs, iq0, Ncells; ndrange=(n, nb))
         else
-            residues!(backend)(disp, R, E, A, measure_mode == :forms ? M : forms, q0, Ncells; ndrange=(n, nb))
+            residues!(backend)(disp, R, E, A, measure_mode == :forms ? M : forms, iq0, Ncells; ndrange=(n, nb))
         end
         KA.synchronize(backend)
     end
@@ -155,11 +155,11 @@ function hamiltonian_matrix!(H, Ã, swt_d::SpinWaveTheoryDevice, qs_supercell)
     n = size(H, 1)
     nb = length(qs_supercell)
     qs_supercell_d = to_backend(backend, F, qs_supercell)
-    build_hamiltonian!(backend)(H, quadratic_table, qs_supercell_d, isnothing(ewald) ? regularization : zero(F);
+    accum_table!(backend)(H, quadratic_table, qs_supercell_d, isnothing(ewald) ? regularization : zero(F);
                                 ndrange=(n, nb))
     if !isnothing(ewald)
         accum_ewald_batched!(H, Ã, ewald, qs_supercell, qs_supercell_d)
-        hermitianize!(backend)(H, regularization; ndrange=(n, n, nb))
+        hermitianpart!(backend)(H, regularization; ndrange=(n, n, nb))
     end
 end
 
@@ -172,7 +172,8 @@ function accum_ewald_batched!(H, Ã, ewald::QuadraticEwaldDevice{F}, qs_supercel
     n = size(H, 1)
     nb = length(qs_supercell)
     ewald_qs = ewald_wavevector.(qs_supercell)
-    ewald_tensor!(backend)(Ã, cache, to_backend(backend, F, first.(ewald_qs)), to_backend(backend, F, getindex.(ewald_qs, 2)),
-                           to_backend(backend, last.(ewald_qs)); ndrange=(ncells(cache), cache.na, cache.na, nb))
+    (qs, q0s, q0_zeros) = (first.(ewald_qs), getindex.(ewald_qs, 2), last.(ewald_qs))
+    ewald_interaction_tensor!(backend)(Ã, cache, to_backend(backend, F, qs), to_backend(backend, F, q0s), to_backend(backend, q0_zeros);
+                                       ndrange=(ncells(cache), cache.na, cache.na, nb))
     accum_ewald!(backend)(H, Ã, ewald, qs_supercell_d; ndrange=(n, nb))
 end

@@ -70,28 +70,28 @@ end
     norms[n, iq] = sqrt(s)
 end
 
-# Accumulates each pole of weight W at wavevector q0+iq, broadened by `kern`,
+# Accumulates each pole of weight W at wavevector iq0+iq, broadened by `kernel`,
 # into data[k, iω, d0+iq]. A thread owns one output, and sums over the poles in
 # the order of `Sunny.broaden_peaks!`, skipping those below its cutoff.
-@kernel function broaden_peaks!(data, @Const(disp), @Const(W), @Const(norms), cutoff, @Const(energies), kern, q0, d0)
+@kernel function broaden_peaks!(data, @Const(disp), @Const(W), @Const(norms), cutoff, @Const(energies), kernel, iq0, d0)
     iω, iq = @index(Global, NTuple)
     ω = energies[iω]
     for k in axes(data, 1)
         data[k, iω, d0+iq] = 0
     end
     for n in axes(disp, 1)
-        norms[n, q0+iq] < cutoff && continue
-        c = kern(disp[n, q0+iq], ω)
+        norms[n, iq0+iq] < cutoff && continue
+        c = kernel(disp[n, iq0+iq], ω)
         for k in axes(data, 1)
-            data[k, iω, d0+iq] += c * W[k, n, q0+iq]
+            data[k, iω, d0+iq] += c * W[k, n, iq0+iq]
         end
     end
 end
 
-# Sums of the poles of wavevector q0+iq at each node z_j of
+# Sums of the poles of wavevector iq0+iq at each node z_j of
 # `Sunny.RetardedBroadening`, split into the real and imaginary parts of 1/(ε -
 # z_j), stored as χ[j, k, iq] for real component k of the measure
-@kernel function retarded_susceptibility!(χr, χi, @Const(disp), @Const(R), @Const(zs), q0)
+@kernel function retarded_susceptibility!(χr, χi, @Const(disp), @Const(R), @Const(zs), iq0)
     j, iq = @index(Global, NTuple)
     for k in axes(R, 1)
         χr[j, k, iq] = 0
@@ -100,11 +100,11 @@ end
     z = zs[j]
     for n in axes(disp, 1)
         # 1/d without the scaling of complex division, as |d| ≥ Im z > 0
-        d = disp[n, q0+iq] - z
+        d = disp[n, iq0+iq] - z
         g = conj(d) / abs2(d)
         for k in axes(R, 1)
-            χr[j, k, iq] += real(g) * R[k, n, q0+iq]
-            χi[j, k, iq] += imag(g) * R[k, n, q0+iq]
+            χr[j, k, iq] += real(g) * R[k, n, iq0+iq]
+            χi[j, k, iq] += imag(g) * R[k, n, iq0+iq]
         end
     end
 end
@@ -217,19 +217,19 @@ function banded_quadrature(zs, W, ranges; block=32)
     return (zs[js], W′, blocks)
 end
 
-# Broadens the wavevectors q0+1:q0+nb into data[k, iω, d0+1:d0+nb], as
+# Broadens the wavevectors iq0+1:iq0+nb into data[k, iω, d0+1:d0+nb], as
 # `Sunny.broaden_peaks!` does
-function broaden_batch!(data, plan::PeakBroadeningDevice, q0, nb, d0, _)
+function broaden_batch!(data, plan::PeakBroadeningDevice, iq0, nb, d0, _)
     (; disp, W, norms, cutoff, energies, kernel) = plan
     backend = KA.get_backend(data)
-    broaden_peaks!(backend)(data, disp, W, norms, cutoff, energies, kernel, q0, d0; ndrange=(length(energies), nb))
+    broaden_peaks!(backend)(data, disp, W, norms, cutoff, energies, kernel, iq0, d0; ndrange=(length(energies), nb))
     return
 end
 
 # The same for the retarded broadening, with `scratch` for at least nb
 # wavevectors. The quadrature applies to the sums at the nodes, y = Wr χi + Wi
 # χr, as one matrix product over all components and wavevectors.
-function broaden_batch!(data, plan::RetardedBroadeningDevice, q0, nb, d0, scratch)
+function broaden_batch!(data, plan::RetardedBroadeningDevice, iq0, nb, d0, scratch)
     (; disp, R, Nω, zs, Wr, Wi, blocks) = plan
     backend = KA.get_backend(data)
     K = num_components(plan)
@@ -237,7 +237,7 @@ function broaden_batch!(data, plan::RetardedBroadeningDevice, q0, nb, d0, scratc
     (χr, χi, y) = scratch
     fill!(y, 0)
     if Nz > 0
-        retarded_susceptibility!(backend)(χr, χi, disp, R, zs, q0; ndrange=(Nz, nb))
+        retarded_susceptibility!(backend)(χr, χi, disp, R, zs, iq0; ndrange=(Nz, nb))
         m = K * nb
         (y2, χr2, χi2) = (reshape(y, Nω, :), reshape(χr, Nz, :), reshape(χi, Nz, :))
         for (is, js) in blocks
