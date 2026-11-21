@@ -94,23 +94,20 @@ function QuadraticTableDevice{F}(backend, t::Sunny.QuadraticTable) where F
 end
 
 # The data of `Sunny.MeasureSpec` that the residues need on a device, in
-# precision F: the pairs of observables to correlate, the forms of the combiner
-# if they are independent of the wavevector (see `resolve_measure_mode`), and
-# the Fourier positions and form factors of each observable, as in
-# `Sunny.observable_prefactor`.
-struct MeasureSpecDevice{F, C, M, VP, VF}
+# precision F: the pairs of observables to correlate, and the Fourier positions
+# and form factors of each observable, as in `Sunny.observable_prefactor`
+struct MeasureSpecDevice{F, C, VP, VF}
     corr_pairs  :: C
-    forms       :: M  # Or `nothing`
     positions   :: VP # [site, part]
     formfactors :: VF # [observable, site, part]
 end
 
-MeasureSpecDevice{F}(corr_pairs::C, forms::M, positions::VP, formfactors::VF) where {F, C, M, VP, VF} =
-    MeasureSpecDevice{F, C, M, VP, VF}(corr_pairs, forms, positions, formfactors)
+MeasureSpecDevice{F}(corr_pairs::C, positions::VP, formfactors::VF) where {F, C, VP, VF} =
+    MeasureSpecDevice{F, C, VP, VF}(corr_pairs, positions, formfactors)
 
 Adapt.adapt_structure(to, m::MeasureSpecDevice{F}) where F = MeasureSpecDevice{F}(adapt_fields(to, m)...)
 
-function MeasureSpecDevice{F}(backend, measure::Sunny.MeasureSpec, sys::Sunny.System, forms) where F
+function MeasureSpecDevice{F}(backend, measure::Sunny.MeasureSpec, sys::Sunny.System) where F
     Na = Sunny.nsites(sys)
     Nparts = Sunny.num_parts_per_unit(measure)
     sites = Sunny.eachsite(sys)
@@ -119,8 +116,25 @@ function MeasureSpecDevice{F}(backend, measure::Sunny.MeasureSpec, sys::Sunny.Sy
     formfactors = [FormFactorDevice{F}(measure.formfactors[μ, Sunny.to_atom(sites[i]), p])
                    for μ in 1:Sunny.num_observables(measure), i in 1:Na, p in 1:Nparts]
     corr_pairs = Sunny.SVector{length(measure.corr_pairs)}(measure.corr_pairs)
-    return MeasureSpecDevice{F}(corr_pairs, forms, to_backend(backend, F, positions), to_backend(backend, formfactors))
+    return MeasureSpecDevice{F}(corr_pairs, to_backend(backend, F, positions), to_backend(backend, formfactors))
 end
+
+# How the residues evaluate the measure, named by Symbols for display: by its
+# combiner on device, by its forms (see `Sunny.measure_forms`) if they are
+# independent of the wavevector, by its forms on the host per wavevector, or not
+# at all, without observables. See `resolve_measure_mode`.
+abstract type MeasureMode end
+struct CombinerMode <: MeasureMode end
+struct ConstantFormsMode{M} <: MeasureMode
+    forms :: M  # M[μ, ν, k, 1] on device
+end
+struct FormsMode <: MeasureMode end
+struct NoMeasureMode <: MeasureMode end
+
+Base.Symbol(::CombinerMode) = :combiner
+Base.Symbol(::ConstantFormsMode) = :constant_forms
+Base.Symbol(::FormsMode) = :forms
+Base.Symbol(::NoMeasureMode) = :none
 
 # The batched eigensolvers of `bogoliubov_batched!`, named by the Symbols of the
 # option `eigensolver` of `to_device`
@@ -146,7 +160,7 @@ struct SpinWaveTheoryDevice{F, B, Q, E, C, M}
     swt              :: Sunny.SpinWaveTheory
     backend          :: B
     eigensolver      :: DeviceEigensolver
-    measure_mode     :: Symbol  # :combiner, :constant_forms, :forms or :none
+    measure_mode     :: MeasureMode
     regularization   :: F
     quadratic_table  :: Q
     ewald            :: E  # Or `nothing`
@@ -206,7 +220,7 @@ end
 function Base.show(io::IO, ::MIME"text/plain", swt_d::SpinWaveTheoryDevice)
     printstyled(io, "SpinWaveTheoryDevice ", Sunny.mode_to_str(swt_d.swt.sys), "\n"; bold=true, color=:underline)
     println(io, "  ", Sunny.nsites(swt_d.swt.sys), " sites on ", swt_d.backend, " in ", precision_of(swt_d),
-            ", eigensolver ", repr(Symbol(swt_d.eigensolver)), ", measure ", repr(swt_d.measure_mode))
+            ", eigensolver ", repr(Symbol(swt_d.eigensolver)), ", measure ", repr(Symbol(swt_d.measure_mode)))
 end
 
 """
@@ -247,13 +261,13 @@ function Sunny.to_device(swt::Sunny.SpinWaveTheory; backend=KA.CPU(), eigensolve
     (; sys, measure, quadratic_table, observable_coefs, ewald) = swt
     L = Sunny.nbands(swt)
     corr_pairs = Sunny.SVector{length(measure.corr_pairs)}(measure.corr_pairs)
-    (measure_mode, forms) = resolve_measure_mode(backend, F, measure, corr_pairs)
+    measure_mode = resolve_measure_mode(backend, F, measure, corr_pairs)
     eigensolver = resolve_eigensolver(backend, eigensolver, 2L, F)
     return SpinWaveTheoryDevice{F}(swt, backend, eigensolver, measure_mode, device_regularization(swt, F),
                                    QuadraticTableDevice{F}(backend, quadratic_table),
                                    isnothing(ewald) ? nothing : QuadraticEwaldDevice{F}(backend, ewald, L),
                                    to_backend(backend, F, observable_coefs),
-                                   MeasureSpecDevice{F}(backend, measure, sys, forms))
+                                   MeasureSpecDevice{F}(backend, measure, sys))
 end
 
 # The constants of `Sunny.ewald_interaction_tensor` in precision F
@@ -410,19 +424,18 @@ function combiner_runs_on(backend, F, measure, corr_pairs)
     end
 end
 
-# How the residues evaluate the measure, and its forms if they are independent
-# of the wavevector. Forms that error, e.g. for a wavevector outside a scattering
-# plane, are taken to depend on it.
+# The `MeasureMode` of the residues. Forms that error, e.g. for a wavevector
+# outside a scattering plane, are taken to depend on it.
 function resolve_measure_mode(backend, F, measure, corr_pairs)
-    Sunny.num_observables(measure) == 0 && return (:none, nothing)
-    combiner_runs_on(backend, F, measure, corr_pairs) && return (:combiner, nothing)
+    Sunny.num_observables(measure) == 0 && return NoMeasureMode()
+    combiner_runs_on(backend, F, measure, corr_pairs) && return CombinerMode()
     qs = [Vec3(0.13, 0.41, 0.77), Vec3(-0.6, 0.25, 0.1), Vec3(0.3, -0.8, 0.45)]
     Ms = try
         [Sunny.measure_forms(measure, q) for q in qs]
     catch
-        return (:forms, nothing)
+        return FormsMode()
     end
-    all(==(Ms[1]), Ms) || return (:forms, nothing)
+    all(==(Ms[1]), Ms) || return FormsMode()
     M = reduce((a, b) -> cat(a, b; dims=3), Ms[1]; init=zeros(ComplexF64, size(Ms[1][1])..., 0))
-    return (:constant_forms, to_backend(backend, F, reshape(M, size(M)..., 1)))
+    return ConstantFormsMode(to_backend(backend, F, reshape(M, size(M)..., 1)))
 end

@@ -71,7 +71,6 @@ Sunny.device_free_memory(::KA.CPU) = Sys.free_memory()
 function Sunny.susceptibility_poles(swt_d::SpinWaveTheoryDevice, qpts; batch_size, budget, threaded)
     (; swt, backend, ewald, observable_coefs, measure_mode) = swt_d
     (; sys, measure) = swt
-    (; corr_pairs, forms) = swt_d.measure
     cryst = Sunny.orig_crystal(sys)
 
     Na = Sunny.nsites(sys)
@@ -99,28 +98,13 @@ function Sunny.susceptibility_poles(swt_d::SpinWaveTheoryDevice, qpts; batch_siz
     A = KA.allocate(backend, Complex{F}, (Nobs, n, batch_size))
     Ã = isnothing(ewald) ? nothing :
         KA.allocate(backend, Sunny.SMatrix{3, 3, Complex{F}, 9}, (ncells(ewald.cache), ewald.cache.na, ewald.cache.na, batch_size))
-    if measure_mode == :forms
-        M_h = zeros(Complex{F}, Nobs, Nobs, K, batch_size)
-        M = KA.allocate(backend, Complex{F}, size(M_h))
-    end
+    scratch = residues_scratch(measure_mode, backend, F, Nobs, K, batch_size)
 
     for iq0 in 0:batch_size:Nq-1
         nb = min(batch_size, Nq - iq0)
         qs = view(qpts.qs, iq0+1:iq0+nb)
         qs_supercell = [Sunny.to_supercell_rlu(sys, q) for q in qs]
         qs_global = [cryst.recipvecs * Vec3(q) for q in qs]
-
-        # The measure as Hermitian forms per wavevector, if the combiner cannot
-        # run on device
-        if measure_mode == :forms
-            Sunny.foreach_chunked(Returns(nothing), 1:nb; threaded) do _, b
-                for (k, Mk) in enumerate(Sunny.measure_forms(measure, qs_global[b]))
-                    view(M_h, :, :, k, b) .= Mk
-                end
-            end
-            copyto!(M, M_h)
-        end
-
         qs_global_d = to_backend(backend, F, qs_global)
 
         excitations_supercell!(T, E, H, Ã, swt_d, qs_supercell; threaded)
@@ -128,15 +112,45 @@ function Sunny.susceptibility_poles(swt_d::SpinWaveTheoryDevice, qpts; batch_siz
         # Linearized observables, and their amplitudes in each band
         observable_vectors!(backend)(u, observable_coefs, swt_d.measure, qs_global_d, Nf; ndrange=(Na, Nobs, nb))
         amplitudes!(backend)(A, u, T; ndrange=(Nobs, n, nb))
-        if measure_mode == :combiner
-            residues_combiner!(backend)(disp, R, E, A, qs_global_d, measure.combiner, corr_pairs, iq0, Ncells; ndrange=(n, nb))
-        else
-            residues!(backend)(disp, R, E, A, measure_mode == :forms ? M : forms, iq0, Ncells; ndrange=(n, nb))
-        end
+        residues_batched!(measure_mode, scratch, disp, R, E, A, swt_d, qs_global, qs_global_d, iq0, Ncells; threaded)
         KA.synchronize(backend)
     end
 
     return (disp, R)
+end
+
+# Scratch of `residues_batched!` for nb wavevectors: the forms of the measure
+# on the host and on the device, if they are evaluated per wavevector
+residues_scratch(::MeasureMode, backend, F, Nobs, K, nb) = nothing
+function residues_scratch(::FormsMode, backend, F, Nobs, K, nb)
+    M_h = zeros(Complex{F}, Nobs, Nobs, K, nb)
+    return (M_h, KA.allocate(backend, Complex{F}, size(M_h)))
+end
+
+# The poles and residues of the wavevectors `qs_global`, from their energies E
+# and amplitudes A, into disp and R at the offset iq0, as in
+# `Sunny.susceptibility_poles`. The measure is evaluated as the `MeasureMode`
+# says.
+function residues_batched!(::CombinerMode, _, disp, R, E, A, swt_d, qs_global, qs_global_d, iq0, Ncells; threaded)
+    (n, nb) = (size(E, 1), length(qs_global))
+    residues_combiner!(swt_d.backend)(disp, R, E, A, qs_global_d, swt_d.swt.measure.combiner, swt_d.measure.corr_pairs,
+                                      iq0, Ncells; ndrange=(n, nb))
+end
+
+function residues_batched!(mode::ConstantFormsMode, _, disp, R, E, A, swt_d, qs_global, qs_global_d, iq0, Ncells; threaded)
+    (n, nb) = (size(E, 1), length(qs_global))
+    residues!(swt_d.backend)(disp, R, E, A, mode.forms, iq0, Ncells; ndrange=(n, nb))
+end
+
+function residues_batched!(::FormsMode, (M_h, M), disp, R, E, A, swt_d, qs_global, qs_global_d, iq0, Ncells; threaded)
+    (n, nb) = (size(E, 1), length(qs_global))
+    Sunny.foreach_chunked(Returns(nothing), 1:nb; threaded) do _, b
+        for (k, Mk) in enumerate(Sunny.measure_forms(swt_d.swt.measure, qs_global[b]))
+            view(M_h, :, :, k, b) .= Mk
+        end
+    end
+    copyto!(M, M_h)
+    residues!(swt_d.backend)(disp, R, E, A, M, iq0, Ncells; ndrange=(n, nb))
 end
 
 # Mirrors `Sunny.excitations_supercell!` for the wavevectors `qs_supercell`,

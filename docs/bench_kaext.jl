@@ -41,7 +41,7 @@ function bench(sys, Nq; host=true)
     qs = [rand(3) for _ in 1:Nq]
     energies = range(0, 10, 200)
     println("$(Sunny.nbands(swt)) bands (n = $(2Sunny.nbands(swt))), $Nq wavevectors, $(length(energies)) energies on $backend ",
-            "(eigensolver $(Symbol(swt_d.eigensolver)), measure $(swt_d.measure_mode))")
+            "(eigensolver $(Symbol(swt_d.eigensolver)), measure $(Symbol(swt_d.measure_mode)))")
     for (name, η, kernel) in (("η=0, kernel", 0, gaussian(fwhm=0.5)), ("η, no kernel", 0.1, nothing),
                               ("η and kernel", 0.1, gaussian(fwhm=0.5)))
         t_host = host ? besttime(() -> intensities(swt, qs; energies, η, kernel, threaded=true)) : NaN

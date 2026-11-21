@@ -168,7 +168,7 @@ end
         sys = fcc_afm(mode)
         swt = SpinWaveTheory(sys; measure=ssf_perp(sys; formfactors=[1 => FormFactor("Co2")]))
         swt_d = test_device_intensities(swt, backend; eigensolver, precision=Float32)
-        @test swt_d.measure_mode == :combiner
+        @test Symbol(swt_d.measure_mode) == :combiner
         @test occursin("in Float32", sprint(show, MIME"text/plain"(), swt_d))
     end
 
@@ -182,7 +182,7 @@ end
                       let w = [1.0]; ((q, ssf) -> w[1] * real(ssf[1, 1] + ssf[2, 2]) * (1 + q[1]^2), :forms) end]
         for precision in (Float64, Float32)
             swt_d = test_device_intensities(SpinWaveTheory(sys; measure=ssf_custom(f, sys)), backend; precision, broadenings=b)
-            @test swt_d.measure_mode == mode
+            @test Symbol(swt_d.measure_mode) == mode
         end
     end
 
@@ -397,7 +397,7 @@ end
             sys = fcc_afm(mode)
             swt = SpinWaveTheory(sys; measure=ssf_perp(sys; formfactors=[1 => FormFactor("Co2")]))
             swt_d = test_device_intensities(swt, backend; eigensolver, precision)
-            @test swt_d.measure_mode == :combiner
+            @test Symbol(swt_d.measure_mode) == :combiner
         end
         sys = entangled_dimers()
         test_device_intensities(SpinWaveTheory(sys; measure=ssf_perp(sys)), backend; eigensolver, precision)
@@ -435,7 +435,7 @@ end
             swt = SpinWaveTheory(sys; measure=ssf_perp(sys; formfactors=[1 => FormFactor("Co2")]))
             swt_d = test_device_intensities(swt, backend; eigensolver)
             # The combiner of `ssf_perp` computes in the device precision
-            @test swt_d.measure_mode == :combiner
+            @test Symbol(swt_d.measure_mode) == :combiner
         end
         test_device_instability(backend; eigensolver)
     end
