@@ -24,7 +24,7 @@ function Sunny.intensities(swt_d::SpinWaveTheoryDevice, qpts; energies, η=0, ke
     Nω = length(energies)
     budget = memory_budget(backend)
 
-    (disp, R) = susceptibility_poles_device(swt_d, qpts; batch_size, budget, threaded)
+    (disp, R) = Sunny.susceptibility_poles(swt_d, qpts; batch_size, budget, threaded)
     plan = broaden_poles_plan(disp, R; energies, η, kernel, kT)
     K = num_components(plan)
 
@@ -64,9 +64,11 @@ end
 
 Sunny.device_free_memory(::KA.CPU) = Sys.free_memory()
 
-# Mirrors `Sunny.susceptibility_poles`. Returns the poles disp[n, iq] and the
-# residues R[k, n, iq] by real component k of the measure, on device.
-function susceptibility_poles_device(swt_d::SpinWaveTheoryDevice, qpts; batch_size, budget, threaded)
+# Like `Sunny.susceptibility_poles` for a `SpinWaveTheory`, but calculated in
+# batches of `batch_size` wavevectors, by default chosen from the memory
+# `budget`. The poles disp[n, iq] and the residues R[k, n, iq], by real
+# component k of the measure rather than as values of it, stay on the device.
+function Sunny.susceptibility_poles(swt_d::SpinWaveTheoryDevice, qpts; batch_size, budget, threaded)
     (; swt, backend, ewald, observable_coefs, measure_mode) = swt_d
     (; sys, measure) = swt
     (; corr_pairs, forms) = swt_d.measure
@@ -143,7 +145,7 @@ end
 function excitations_supercell!(T, E, H, Ã, swt_d::SpinWaveTheoryDevice, qs_supercell; threaded)
     hamiltonian_matrix!(H, Ã, swt_d, qs_supercell)
     KA.synchronize(swt_d.backend)
-    bogoliubov_batched!(T, E, H, length(qs_supercell), swt_d, qs_supercell; threaded)
+    bogoliubov_batched!(T, E, H, swt_d, qs_supercell; threaded)
 end
 
 # Mirrors `Sunny.hamiltonian_matrix!` for the wavevectors `qs_supercell`: the

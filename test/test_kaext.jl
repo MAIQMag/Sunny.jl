@@ -368,7 +368,7 @@ end
     # cuSOLVER is the default eigensolver in both precisions
     swt = SpinWaveTheory(fcc_afm(:dipole); measure=nothing)
     for precision in (Float64, Float32)
-        @test to_device(swt; backend, precision).eigensolver == :vendor
+        @test Symbol(to_device(swt; backend, precision).eigensolver) == :vendor
     end
 end
 
@@ -407,7 +407,7 @@ end
     # rocSOLVER is the default eigensolver in both precisions
     swt = SpinWaveTheory(fcc_afm(:dipole); measure=nothing)
     for precision in (Float64, Float32)
-        @test to_device(swt; backend, precision).eigensolver == :vendor
+        @test Symbol(to_device(swt; backend, precision).eigensolver) == :vendor
     end
 end
 
@@ -447,15 +447,15 @@ end
     # most 2 bands, and otherwise :host, as without one. 200 sites give n = 400.
     for sys in (unstable_chain(), repeat_periodically(unstable_chain(), (2, 1, 1)))
         swt = SpinWaveTheory(sys; measure=nothing)
-        @test to_device(swt; backend).eigensolver == :jacobi
-        @test to_device(swt; backend, eigensolver=:vendor).eigensolver == :vendor
+        @test Symbol(to_device(swt; backend).eigensolver) == :jacobi
+        @test Symbol(to_device(swt; backend, eigensolver=:vendor).eigensolver) == :vendor
     end
     for mode in (:dipole, :SUN)
         swt = SpinWaveTheory(fcc_afm(mode); measure=nothing)
-        @test to_device(swt; backend).eigensolver == :vendor
+        @test Symbol(to_device(swt; backend).eigensolver) == :vendor
     end
     swt = SpinWaveTheory(repeat_periodically(fcc_afm(:dipole), (5, 5, 2)); measure=nothing)
-    @test to_device(swt; backend).eigensolver == :host
+    @test Symbol(to_device(swt; backend).eigensolver) == :host
     @test_throws "at most 128 bands" to_device(swt; backend, eigensolver=:vendor)
     @test_throws "Float64" to_device(swt; backend, precision=Float64)
 end

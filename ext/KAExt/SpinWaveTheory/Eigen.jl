@@ -7,26 +7,28 @@ const STATUS_NONFINITE = Int32(-1)
 const STATUS_INERTIA = Int32(-2)
 const STATUS_NOCONVERGE = Int32(-3)
 
-# Solves the Bogoliubov problem for the first `nb` Hamiltonians of `H`, storing
-# the transformations in `T` and the energies in `E`, as `Sunny.bogoliubov!`
-# does for one. The contents of H are overwritten.
-function bogoliubov_batched!(T, E, H, nb, swt_d, qs_supercell; threaded)
-    (; swt, eigensolver, backend) = swt_d
-    if eigensolver == :host
-        bogoliubov_host!(T, E, H, nb, swt, qs_supercell; threaded)
-        return
-    end
-    n = size(H, 1)
+# Solves the Bogoliubov problem for the first Hamiltonians of `H`, one per
+# wavevector of `qs_supercell`, storing the transformations in `T` and the
+# energies in `E`, as `Sunny.bogoliubov_or_throw!` does for one. The contents of
+# H are overwritten.
+bogoliubov_batched!(T, E, H, swt_d, qs_supercell; threaded) =
+    bogoliubov_batched!(swt_d.eigensolver, T, E, H, swt_d, qs_supercell; threaded)
+
+function bogoliubov_batched!(::JacobiEigensolver, T, E, H, swt_d, qs_supercell; threaded)
+    (; backend) = swt_d
+    (n, nb) = (size(H, 1), length(qs_supercell))
     status = KA.allocate(backend, Int32, nb)
-    if eigensolver == :jacobi
-        W = KA.allocate(backend, eltype(H), (n, n, nb))
-        bogoliubov_jacobi!(backend)(T, E, H, W, status; ndrange=nb)
-        KA.synchronize(backend)
-    else
-        @assert eigensolver == :vendor
-        Sunny.vendor_bogoliubov!(T, E, H, nb, status)
-    end
-    throw_bogoliubov_status(Array(status), swt, qs_supercell)
+    W = KA.allocate(backend, eltype(H), (n, n, nb))
+    bogoliubov_jacobi!(backend)(T, E, H, W, status; ndrange=nb)
+    KA.synchronize(backend)
+    throw_bogoliubov_status(Array(status), swt_d.swt, qs_supercell)
+end
+
+function bogoliubov_batched!(::VendorEigensolver, T, E, H, swt_d, qs_supercell; threaded)
+    nb = length(qs_supercell)
+    status = KA.allocate(swt_d.backend, Int32, nb)
+    Sunny.vendor_bogoliubov!(T, E, H, nb, status)
+    throw_bogoliubov_status(Array(status), swt_d.swt, qs_supercell)
 end
 
 # Errors of `Sunny.bogoliubov_or_throw!` for the first failed wavevector
@@ -68,8 +70,9 @@ end
 
 # Copies to the host and calls LAPACK per wavevector, in Float64 whatever the
 # precision of H
-function bogoliubov_host!(T, E, H, nb, swt, qs_supercell; threaded)
-    n = size(H, 1)
+function bogoliubov_batched!(::HostEigensolver, T, E, H, swt_d, qs_supercell; threaded)
+    (; swt) = swt_d
+    (n, nb) = (size(H, 1), length(qs_supercell))
     L = n ÷ 2
     on_host = H isa Array{ComplexF64}
     (H_h, T_h, E_h) = on_host ? (H, T, E) : (Array(view(H, :, :, 1:nb)), similar(Array{ComplexF64}, n, n, nb), similar(Array{Float64}, n, nb))

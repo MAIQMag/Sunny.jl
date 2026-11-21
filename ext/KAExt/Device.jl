@@ -122,12 +122,30 @@ function MeasureSpecDevice{F}(backend, measure::Sunny.MeasureSpec, sys::Sunny.Sy
     return MeasureSpecDevice{F}(corr_pairs, forms, to_backend(backend, F, positions), to_backend(backend, formfactors))
 end
 
+# The batched eigensolvers of `bogoliubov_batched!`, named by the Symbols of the
+# option `eigensolver` of `to_device`
+abstract type DeviceEigensolver end
+struct HostEigensolver <: DeviceEigensolver end    # LAPACK on the host
+struct JacobiEigensolver <: DeviceEigensolver end  # The kernel `bogoliubov_jacobi!`
+struct VendorEigensolver <: DeviceEigensolver end  # `Sunny.vendor_bogoliubov!` of an extension
+
+function DeviceEigensolver(name::Symbol)
+    name == :host && return HostEigensolver()
+    name == :jacobi && return JacobiEigensolver()
+    name == :vendor && return VendorEigensolver()
+    error("Unknown eigensolver $(repr(name)); use :host, :jacobi or :vendor")
+end
+
+Base.Symbol(::HostEigensolver) = :host
+Base.Symbol(::JacobiEigensolver) = :jacobi
+Base.Symbol(::VendorEigensolver) = :vendor
+
 # Mirrors `Sunny.SpinWaveTheory` on `backend`, with floating point numbers in
 # precision F
 struct SpinWaveTheoryDevice{F, B, Q, E, C, M}
     swt              :: Sunny.SpinWaveTheory
     backend          :: B
-    eigensolver      :: Symbol
+    eigensolver      :: DeviceEigensolver
     measure_mode     :: Symbol  # :combiner, :constant_forms, :forms or :none
     regularization   :: F
     quadratic_table  :: Q
@@ -163,6 +181,10 @@ end
 # and 40. It lagged rocSOLVER for all n, e.g. 1.7 vs 1.5 µs per matrix for
 # n = 8, and 337 vs 56 µs for n = 40, with 100k matrices in Float64.
 function resolve_eigensolver(backend, eigensolver, n, F)
+    return DeviceEigensolver(resolve_eigensolver_name(backend, eigensolver, n, F))
+end
+
+function resolve_eigensolver_name(backend, eigensolver, n, F)
     if isnothing(eigensolver)
         backend isa KA.CPU && return :host
         if has_vendor_bogoliubov(backend, F, n) && n >= Sunny.vendor_bogoliubov_min_default_size(backend)
@@ -184,7 +206,7 @@ end
 function Base.show(io::IO, ::MIME"text/plain", swt_d::SpinWaveTheoryDevice)
     printstyled(io, "SpinWaveTheoryDevice ", Sunny.mode_to_str(swt_d.swt.sys), "\n"; bold=true, color=:underline)
     println(io, "  ", Sunny.nsites(swt_d.swt.sys), " sites on ", swt_d.backend, " in ", precision_of(swt_d),
-            ", eigensolver ", repr(swt_d.eigensolver), ", measure ", repr(swt_d.measure_mode))
+            ", eigensolver ", repr(Symbol(swt_d.eigensolver)), ", measure ", repr(swt_d.measure_mode))
 end
 
 """
